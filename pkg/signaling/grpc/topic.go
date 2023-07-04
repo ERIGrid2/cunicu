@@ -1,69 +1,36 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package grpc
 
 import (
-	"sync"
-
-	"github.com/stv0g/cunicu/pkg/crypto"
 	"github.com/stv0g/cunicu/pkg/signaling"
-	"github.com/stv0g/cunicu/pkg/util"
+	"github.com/stv0g/cunicu/pkg/types"
 )
 
-type topicRegistry struct {
-	topics     map[crypto.Key]*topic
-	topicsLock sync.Mutex
+type Topic struct {
+	subs *types.FanOut[*signaling.Envelope]
 }
 
-func (r *topicRegistry) getTopic(pk *crypto.Key) *topic {
-	r.topicsLock.Lock()
-	defer r.topicsLock.Unlock()
-
-	top, ok := r.topics[*pk]
-	if ok {
-		return top
+func NewTopic() *Topic {
+	return &Topic{
+		// TODO: Make smaller again
+		subs: types.NewFanOut[*signaling.Envelope](10000),
 	}
-
-	top = NewTopic()
-
-	r.topics[*pk] = top
-
-	return top
 }
 
-func (r *topicRegistry) Close() error {
-	r.topicsLock.Lock()
-	defer r.topicsLock.Unlock()
-
-	for _, t := range r.topics {
-		t.Close()
-	}
-
-	return nil
-}
-
-type topic struct {
-	subs *util.FanOut[*signaling.Envelope]
-}
-
-func NewTopic() *topic {
-	t := &topic{
-		subs: util.NewFanOut[*signaling.Envelope](128),
-	}
-
-	return t
-}
-
-func (t *topic) Publish(env *signaling.Envelope) {
+func (t *Topic) Publish(env *signaling.Envelope) {
 	t.subs.Send(env)
 }
 
-func (t *topic) Subscribe() chan *signaling.Envelope {
+func (t *Topic) Subscribe() chan *signaling.Envelope {
 	return t.subs.Add()
 }
 
-func (t *topic) Unsubscribe(ch chan *signaling.Envelope) {
+func (t *Topic) Unsubscribe(ch chan *signaling.Envelope) {
 	t.subs.Remove(ch)
 }
 
-func (t *topic) Close() {
+func (t *Topic) Close() {
 	t.subs.Close()
 }

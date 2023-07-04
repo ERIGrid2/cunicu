@@ -1,85 +1,112 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 // Package log implements adapters between logging types of various used packages
 package log
 
 import (
+	"os"
+
+	"github.com/onsi/ginkgo/v2"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc/grpclog"
-	"k8s.io/klog/v2"
+
+	"github.com/stv0g/cunicu/pkg/tty"
 )
 
+//nolint:gochecknoglobals
 var (
-	Verbosity VerbosityLevel
-	Severity  zap.AtomicLevel
+	Rule   AtomicFilterRule
+	Global *Logger
 )
 
-func SetupLogging(severity zapcore.Level, verbosity int, outputPaths []string, errOutputPaths []string, color bool) *zap.Logger {
-	Severity = zap.NewAtomicLevelAt(severity)
-	Verbosity = NewVerbosityLevelAt(verbosity)
-
-	cfg := zap.NewDevelopmentConfig()
-
-	cfg.Level = Severity
-	cfg.EncoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout("15:04:05.009")
-	if color {
-		cfg.EncoderConfig.EncodeLevel = zapcore.LowercaseColorLevelEncoder
-	} else {
-		cfg.EncoderConfig.EncodeLevel = zapcore.LowercaseLevelEncoder
-	}
-	cfg.DisableCaller = true
-	cfg.DisableStacktrace = true
-	cfg.OutputPaths = outputPaths
-	cfg.ErrorOutputPaths = errOutputPaths
-
-	if len(cfg.OutputPaths) == 0 {
-		cfg.OutputPaths = []string{"stdout"}
+func openSink(path string) zapcore.WriteSyncer {
+	switch path {
+	case "stdout":
+		return os.Stdout
+	case "stderr":
+		return os.Stderr
+	case "ginkgo":
+		return &ginkgoSyncWriter{ginkgo.GinkgoWriter}
 	}
 
-	if len(cfg.ErrorOutputPaths) == 0 {
-		cfg.ErrorOutputPaths = []string{"stderr"}
-	}
-
-	logger, err := cfg.Build()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
 	if err != nil {
 		panic(err)
 	}
 
-	// Redirect Kubernetes log to Zap
-	klogger := logger.Named("backend.k8s")
-	klog.SetLogger(NewK8SLogger(klogger))
-
-	// Redirect gRPC log to Zap
-	glogger := logger.Named("grpc")
-	grpclog.SetLoggerV2(NewGRPCLogger(glogger, verbosity))
-
-	zap.RedirectStdLog(logger)
-	zap.ReplaceGlobals(logger)
-
-	return logger
+	return tty.NewANSIStripperSynced(f)
 }
 
-func WithVerbose(verbose int) zap.Option {
-	return zap.WrapCore(func(core zapcore.Core) zapcore.Core {
-		return &verbosityCore{
-			Core:    core,
-			verbose: verbose,
-		}
-	})
-}
+type alwaysEnabled struct{}
 
-type verbosityCore struct {
-	zapcore.Core
-	verbose int
-}
+func (e *alwaysEnabled) Enabled(zapcore.Level) bool { return true }
 
-func (c *verbosityCore) Enabled(lvl zapcore.Level) bool {
-	return c.Core.Enabled(lvl) && (lvl != zap.DebugLevel || Verbosity.Enabled(c.verbose))
-}
-
-func (c *verbosityCore) Check(ent zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
-	if c.Enabled(ent.Level) {
-		return ce.AddCore(ent, c)
+func SetupLogging(rule string, paths []string, color bool) (logger *Logger, err error) {
+	cfg := encoderConfig{
+		Time:             true,
+		Level:            true,
+		Name:             true,
+		Message:          true,
+		ConsoleSeparator: " ",
+		LineEnding:       zapcore.DefaultLineEnding,
+		EncodeTime:       zapcore.TimeEncoderOfLayout("15:04:05.000000"),
+		EncodeDuration:   zapcore.StringDurationEncoder,
+		EncodeCaller:     zapcore.ShortCallerEncoder,
+		EncodeLevel:      levelEncoder,
 	}
 
-	return ce
+	if color {
+		cfg.ColorTime = ColorTime
+		cfg.ColorContext = ColorContext
+		cfg.ColorStacktrace = ColorStacktrace
+		cfg.ColorName = ColorName
+		cfg.ColorCaller = ColorCaller
+		cfg.ColorLevel = ColorLevel
+	}
+
+	wss := []zapcore.WriteSyncer{}
+
+	for _, path := range paths {
+		wss = append(wss, openSink(path))
+	}
+
+	if len(wss) == 0 {
+		wss = append(wss, os.Stdout)
+	}
+
+	ws := zapcore.NewMultiWriteSyncer(wss...)
+	enc := newEncoder(cfg)
+	core := zapcore.NewCore(enc, ws, &alwaysEnabled{})
+
+	if rule != "" {
+		filterRule, err := ParseFilterRule(rule)
+		if err != nil {
+			return nil, err
+		}
+
+		Rule.Store(filterRule)
+	}
+
+	zlogger := zap.New(core,
+		zap.ErrorOutput(ws),
+		zap.WrapCore(func(c zapcore.Core) zapcore.Core {
+			return NewFilteredCore(c, &Rule)
+		}))
+
+	zlogger.Level()
+
+	zap.RedirectStdLog(zlogger)
+	zap.ReplaceGlobals(zlogger)
+
+	logger = &Logger{zlogger}
+
+	Global = logger
+
+	// Redirect gRPC log to Zap
+	glogger := NewGRPCLogger(logger.Named("grpc"))
+	grpclog.SetLoggerV2(glogger)
+
+	return logger, nil
 }

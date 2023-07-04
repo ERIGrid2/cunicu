@@ -1,119 +1,93 @@
+// SPDX-FileCopyrightText: 2023 Atsushi Watanabe <atsushi.w@ieee.org>
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: MIT
+
 package log
 
 import (
 	"fmt"
-	"os"
-	"unicode"
+	"sync"
 
 	"github.com/pion/logging"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
-type PionLoggerFactory struct {
-	Base *zap.Logger
-}
+var (
+	_ logging.LeveledLogger = (*pionLogger)(nil)
+	_ logging.LoggerFactory = (*PionLoggerFactory)(nil)
+)
 
-type pionLeveledLogger struct {
-	logging.LeveledLogger
-
+type pionLogger struct {
 	*zap.SugaredLogger
 }
 
-func (l *pionLeveledLogger) Trace(msg string) {
+func (l *pionLogger) Trace(msg string) {
+	l.Desugar().Log(zapcore.Level(TraceLevel), msg)
+}
+
+func (l *pionLogger) Tracef(format string, args ...interface{}) {
+	// Check for level before calling fmt.Sprintf()
+	if d := l.Desugar(); d.Check(zapcore.Level(TraceLevel), "") != nil {
+		d.Log(zapcore.Level(TraceLevel), fmt.Sprintf(format, args...))
+	}
+}
+
+func (l *pionLogger) Debug(msg string) {
 	l.SugaredLogger.Debug(msg)
 }
 
-func (l *pionLeveledLogger) Tracef(format string, args ...any) {
-	l.SugaredLogger.Debugf(format, args...)
-}
-
-func (l *pionLeveledLogger) Debug(msg string) {
-	l.SugaredLogger.Debug(msg)
-}
-
-func (l *pionLeveledLogger) Debugf(format string, args ...any) {
-	l.SugaredLogger.Debugf(format, args...)
-}
-
-func (l *pionLeveledLogger) Info(msg string) {
+func (l *pionLogger) Info(msg string) {
 	l.SugaredLogger.Info(msg)
 }
 
-func (l *pionLeveledLogger) Infof(format string, args ...any) {
-	l.SugaredLogger.Infof(format, args...)
-}
-
-func (l *pionLeveledLogger) Warn(msg string) {
+func (l *pionLogger) Warn(msg string) {
 	l.SugaredLogger.Warn(msg)
 }
 
-func (l *pionLeveledLogger) Warnf(format string, args ...any) {
-	l.SugaredLogger.Warnf(format, args...)
-}
-
-func (l *pionLeveledLogger) Error(msg string) {
+func (l *pionLogger) Error(msg string) {
 	l.SugaredLogger.Error(msg)
 }
 
-func (l *pionLeveledLogger) Errorf(format string, args ...any) {
-	l.SugaredLogger.Errorf(format, args...)
+// PionLoggerFactory is a logger factory backended by zap logger.
+type PionLoggerFactory struct {
+	base *zap.Logger
+
+	mu      sync.Mutex
+	loggers []*pionLogger
 }
 
+// NewLogger creates new scoped logger.
 func (f *PionLoggerFactory) NewLogger(scope string) logging.LeveledLogger {
-	var lvl zapcore.Level
-	if lvlStr := os.Getenv("PION_LOG"); lvlStr != "" {
-		if err := lvl.UnmarshalText([]byte(lvlStr)); err != nil {
-			f.Base.Fatal("Unknown ICE logger level", zap.Error(err), zap.String("level", lvlStr))
-		}
-	} else {
-		lvl = zapcore.WarnLevel
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	l := &pionLogger{
+		SugaredLogger: f.base.Named(scope).WithOptions(zap.AddCallerSkip(1)).Sugar(),
 	}
+	f.loggers = append(f.loggers, l)
 
-	loggerName := "ice"
-	if scope != "ice" {
-		loggerName += fmt.Sprintf(".%s", scope)
-	}
+	return l
+}
 
-	logger := f.Base.Named(loggerName).WithOptions(
-		zap.WrapCore(func(c zapcore.Core) zapcore.Core {
-			return &pionCore{
-				Core:      c,
-				PionLevel: lvl,
-			}
-		}),
-	)
+// SyncAll calls Sync() method of all child loggers.
+// It is recommended to call this before exiting the program to
+// ensure never loosing buffered log.
+func (f *PionLoggerFactory) SyncAll() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 
-	return &pionLeveledLogger{
-		SugaredLogger: logger.Sugar(),
+	for _, l := range f.loggers {
+		_ = l.SugaredLogger.Sync()
 	}
 }
 
-func NewPionLoggerFactory(base *zap.Logger) *PionLoggerFactory {
-	return &PionLoggerFactory{Base: base}
-}
-
-type pionCore struct {
-	zapcore.Core
-	PionLevel zapcore.Level
-}
-
-func (c *pionCore) Write(e zapcore.Entry, f []zapcore.Field) error {
-	runes := []rune(e.Message)
-
-	if len(runes) > 0 {
-		runes[0] = unicode.ToUpper(runes[0])
+func NewPionLoggerFactory(base *Logger) logging.LoggerFactory {
+	return &PionLoggerFactory{
+		base: base.Logger,
 	}
-
-	e.Message = string(runes)
-
-	return c.Core.Write(e, f)
 }
 
-func (c *pionCore) Check(e zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
-	if c.PionLevel.Enabled(e.Level) {
-		return ce.AddCore(e, c)
-	}
-
-	return ce
+func NewPionLogger(base *Logger, scope string) logging.LeveledLogger {
+	return NewPionLoggerFactory(base).NewLogger(scope)
 }

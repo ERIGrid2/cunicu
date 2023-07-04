@@ -1,16 +1,19 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package rpc
 
 import (
 	"strings"
 
-	"github.com/stv0g/cunicu/pkg/crypto"
 	"go.uber.org/zap"
+
+	"github.com/stv0g/cunicu/pkg/crypto"
+	"github.com/stv0g/cunicu/pkg/log"
 )
 
-func (e *Event) Log(l *zap.Logger, msg string, fields ...zap.Field) {
-	if e.Type != EventType_UNKNOWN {
-		fields = append(fields, zap.String("type", strings.ToLower(e.Type.String())))
-	}
+func (e *Event) Log(l *log.Logger, msg string, fields ...zap.Field) {
+	fields = append(fields, zap.String("type", strings.ToLower(e.Type.String())))
 
 	if e.Event != nil {
 		fields = append(fields, zap.Any("event", e.Event))

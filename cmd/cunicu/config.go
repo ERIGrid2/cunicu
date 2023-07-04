@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -12,18 +15,19 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/stv0g/cunicu/pkg/config"
+	"github.com/stv0g/cunicu/pkg/proto"
 	rpcproto "github.com/stv0g/cunicu/pkg/proto/rpc"
 )
 
-var (
-	configCmd = &cobra.Command{
+func init() { //nolint:gochecknoinits
+	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Manage configuration of a running cunīcu daemon.",
 		Long: `
 `,
 	}
 
-	setCmd = &cobra.Command{
+	setCmd := &cobra.Command{
 		Use:               "set key value",
 		Short:             "Update the value of a configuration setting",
 		Run:               set,
@@ -31,19 +35,26 @@ var (
 		ValidArgsFunction: validConfigSettings,
 	}
 
-	getCmd = &cobra.Command{
+	getCmd := &cobra.Command{
 		Use:               "get [key]",
 		Short:             "Get current value of a configuration setting",
 		Run:               get,
 		Args:              cobra.RangeArgs(0, 1),
 		ValidArgsFunction: validConfigSettings,
 	}
-)
 
-func init() {
-	addClientCommand(rootCmd, configCmd)
-	configCmd.AddCommand(setCmd)
-	configCmd.AddCommand(getCmd)
+	reloadCmd := &cobra.Command{
+		Use:   "reload",
+		Short: "Reload the configuration of the cunīcu daemon",
+		RunE:  reload,
+		Args:  cobra.NoArgs,
+	}
+
+	cmd.AddCommand(setCmd)
+	cmd.AddCommand(getCmd)
+	cmd.AddCommand(reloadCmd)
+
+	addClientCommand(rootCmd, cmd)
 }
 
 func getCompletions(typ reflect.Type, haveCompleted, toComplete string) ([]string, cobra.ShellCompDirective) {
@@ -85,7 +96,7 @@ func getCompletions(typ reflect.Type, haveCompleted, toComplete string) ([]strin
 	return comps, flags
 }
 
-func validConfigSettings(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+func validConfigSettings(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	if len(args) > 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
@@ -95,7 +106,7 @@ func validConfigSettings(cmd *cobra.Command, args []string, toComplete string) (
 	return getCompletions(t, "", toComplete)
 }
 
-func set(cmd *cobra.Command, args []string) {
+func set(_ *cobra.Command, args []string) {
 	settings := map[string]string{
 		args[0]: args[1],
 	}
@@ -107,7 +118,7 @@ func set(cmd *cobra.Command, args []string) {
 	}
 }
 
-func get(cmd *cobra.Command, args []string) {
+func get(_ *cobra.Command, args []string) {
 	params := &rpcproto.GetConfigParams{}
 
 	if len(args) > 0 {
@@ -125,4 +136,12 @@ func get(cmd *cobra.Command, args []string) {
 	for _, key := range keys {
 		fmt.Printf("%s\t%s\n", key, resp.Settings[key])
 	}
+}
+
+func reload(_ *cobra.Command, _ []string) error {
+	if _, err := rpcClient.ReloadConfig(context.Background(), &proto.Empty{}); err != nil {
+		return fmt.Errorf("failed RPC request: %w", err)
+	}
+
+	return nil
 }

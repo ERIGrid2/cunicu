@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 syntax = "proto3";
 
 package cunicu.core;
@@ -5,15 +8,16 @@ option go_package = "github.com/stv0g/cunicu/pkg/proto/core";
 
 import "common.proto";
 import "core/peer.proto";
-import "feat/epdisc.proto";
+import "feature/epdisc.proto";
 
-// Type of the WireGuard interface impelementation
+// Type of the WireGuard interface implementation
 enum InterfaceType {
-    UNKNOWN = 0;
-    LINUX_KERNEL = 1;
-    OPENBSD_KERNEL = 2;
-    WINDOWS_KERNEL = 3;
-    USERSPACE = 4;
+    UNSPECIFIED_INTERFACE_TYPE = 0;
+    KERNEL_LINUX = 1;
+    KERNEL_OPENBSD = 2;
+    KERNEL_FREEBSD = 3;
+    KERNEL_WINDOWS = 4;
+    USERSPACE = 5;
 }
 
 // A WireGuard interface

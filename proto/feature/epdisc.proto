@@ -1,0 +1,64 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package cunicu.epdisc;
+option go_package = "github.com/stv0g/cunicu/pkg/proto/feature/epdisc";
+
+import "common.proto";
+import "feature/epdisc_candidate.proto";
+
+// ICE Connection state from pion/ice/ice.go
+enum ConnectionState {
+	NEW = 0;           // ICE agent is gathering addresses
+	CHECKING = 1;      // ICE agent has been given local and remote candidates, and is attempting to find a match
+	CONNECTED = 2;     // ICE agent has a pairing, but is still checking other pairs
+	COMPLETED = 3;     // ICE agent has finished
+	FAILED = 4;        // ICE agent never could successfully connect
+	DISCONNECTED = 5;  // ICE agent connected successfully, but has entered a failed state
+	CLOSED = 6;        // ICE agent has finished and is no longer handling requests
+}
+
+enum NATType {
+    NONE = 0;
+    NFTABLES = 1;
+}
+
+enum ProxyType {
+    NO_PROXY = 0;
+    USER_BIND = 1;
+    KERNEL_CONN = 2;
+    KERNEL_NAT = 3;
+}
+
+message Credentials {
+    // ICE username fragment
+    string ufrag = 1;
+
+    // ICE password
+    string pwd = 2;
+
+    // Flag to indicate that the sending peer requests the credentials of the receiving peer
+    bool need_creds = 3;
+}
+
+message Interface {
+    NATType nat_type = 1;
+    uint32 mux_port  = 2;
+    uint32 mux_srflx_port = 3;
+}
+
+message Peer {
+    ProxyType proxy_type = 1;
+
+    CandidatePair selected_candidate_pair = 4;
+    
+    repeated CandidateStats local_candidate_stats = 6;
+    repeated CandidateStats remote_candidate_stats = 7;
+    repeated CandidatePairStats candidate_pair_stats = 8;
+    
+    Timestamp last_state_change_timestamp = 9;
+
+    uint32 restarts = 10;
+}

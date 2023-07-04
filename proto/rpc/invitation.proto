@@ -1,0 +1,12 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package cunicu.rpc;
+option go_package = "github.com/stv0g/cunicu/pkg/proto/rpc";
+
+message Invitation {
+    bytes community = 1;
+    string endpoint = 2;
+}

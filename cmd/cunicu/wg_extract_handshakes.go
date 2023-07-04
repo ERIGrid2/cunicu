@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 //go:build tracer
 
 package main
@@ -8,13 +11,13 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/stv0g/cunicu/pkg/util"
+	osx "github.com/stv0g/cunicu/pkg/os"
 	"github.com/stv0g/cunicu/pkg/wg/tracer"
 	"go.uber.org/zap"
 )
 
-var (
-	wgExtractHandshakesCmd = &cobra.Command{
+func init() {
+	cmd := &cobra.Command{
 		Use:   "extract-handshakes",
 		Short: "Extract WireGuard handshakes from Linux kernel",
 		Long: `This command extracts ephemeral session secrets from handshakes of local WireGuard interfaces via Linux eBPF and kProbes.
@@ -24,21 +27,19 @@ See: https://wiki.wireshark.org/WireGuard#key-log-format
 `,
 		RunE: wgExtractHandshakes,
 	}
-)
 
-func init() {
-	wgCmd.AddCommand(wgExtractHandshakesCmd)
+	wgCmd.AddCommand(cmd)
 }
 
 func wgExtractHandshakes(cmd *cobra.Command, args []string) error {
-	logger := zap.L().Named("tracer")
+	logger := log.Global.Named("tracer")
 
 	ht, err := tracer.NewHandshakeTracer()
 	if err != nil {
 		logger.Fatal("Failed to create tracer", zap.Error(err))
 	}
 
-	sigs := util.SetupSignals()
+	sigs := osx.SetupSignals()
 
 out:
 	for {

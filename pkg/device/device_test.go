@@ -1,26 +1,26 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package device_test
 
 import (
-	"math/rand"
 	"testing"
+
+	osx "github.com/stv0g/cunicu/pkg/os"
+	"github.com/stv0g/cunicu/test"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/stv0g/cunicu/pkg/util"
-	"github.com/stv0g/cunicu/test"
 )
 
 func TestSuite(t *testing.T) {
-	rand.Seed(GinkgoRandomSeed())
-
+	test.SetupLogging()
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Device Suite")
 }
 
-var _ = test.SetupLogging()
-
 var _ = BeforeSuite(func() {
-	if !util.HasAdminPrivileges() {
+	if !osx.HasAdminPrivileges() {
 		Skip("Insufficient privileges")
 	}
 })

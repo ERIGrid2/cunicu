@@ -1,49 +1,36 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package test
 
 import (
 	"fmt"
-	"net/url"
 	"os"
-	"path"
-	"strings"
+	"path/filepath"
 
 	"github.com/onsi/ginkgo/v2"
+
 	"github.com/stv0g/cunicu/pkg/log"
-	t "github.com/stv0g/cunicu/pkg/util/terminal"
-	"go.uber.org/zap"
+	"github.com/stv0g/cunicu/pkg/tty"
 )
 
-type writerWrapper struct {
-	ginkgo.GinkgoWriterInterface
-}
-
-func (w *writerWrapper) Close() error {
-	return nil
-}
-
-func (w *writerWrapper) Sync() error {
-	return nil
-}
-
-func SetupLogging() *zap.Logger {
-	return SetupLoggingWithFile("", false)
-}
-
-func SetupLoggingWithFile(fn string, truncate bool) *zap.Logger {
-	if err := zap.RegisterSink("ginkgo", func(u *url.URL) (zap.Sink, error) {
-		return &writerWrapper{
-			GinkgoWriterInterface: ginkgo.GinkgoWriter,
-		}, nil
-	}); err != nil && !strings.Contains(err.Error(), "already registered") {
+func SetupLogging() *log.Logger {
+	logger, err := SetupLoggingWithFile("", false)
+	if err != nil {
 		panic(err)
 	}
 
-	outputPaths := []string{"ginkgo:"}
+	return logger
+}
+
+func SetupLoggingWithFile(fn string, truncate bool) (*log.Logger, error) {
+	outputPaths := []string{"ginkgo"}
 
 	if fn != "" {
 		// Create parent directories for log file
-		if path := path.Dir(fn); path != "" {
-			if err := os.MkdirAll(path, 0750); err != nil {
+		if path := filepath.Dir(fn); path != "" {
+			if err := os.MkdirAll(path, 0o750); err != nil {
 				panic(fmt.Errorf("failed to directory of log file: %w", err))
 			}
 		}
@@ -53,15 +40,13 @@ func SetupLoggingWithFile(fn string, truncate bool) *zap.Logger {
 			fl |= os.O_TRUNC
 		}
 
-		//#nosec G304 -- Test code is not controllable by attackers
-		//#nosec G302 -- Log file should be readable by users
-		f, err := os.OpenFile(fn, fl, 0644)
+		f, err := os.OpenFile(fn, fl, 0o644)
 		if err != nil {
 			panic(fmt.Errorf("failed to open log file '%s': %w", fn, err))
 		}
 
-		ginkgo.GinkgoWriter.TeeTo(t.NewANSIStripper(f))
+		ginkgo.GinkgoWriter.TeeTo(tty.NewANSIStripper(f))
 	}
 
-	return log.SetupLogging(zap.DebugLevel, 10, outputPaths, outputPaths, true)
+	return log.SetupLogging("", outputPaths, true)
 }

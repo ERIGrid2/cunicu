@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package e2e_test
 
 import (
@@ -6,30 +9,29 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"time"
+
+	g "github.com/stv0g/gont/v2/pkg"
+	gopt "github.com/stv0g/gont/v2/pkg/options"
+	copt "github.com/stv0g/gont/v2/pkg/options/capture"
+
+	"github.com/stv0g/cunicu/pkg/log"
+	osx "github.com/stv0g/cunicu/pkg/os"
+	"github.com/stv0g/cunicu/pkg/tty"
+	"github.com/stv0g/cunicu/test"
+	"github.com/stv0g/cunicu/test/e2e/nodes"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	g "github.com/stv0g/gont/pkg"
-	gopt "github.com/stv0g/gont/pkg/options"
-	copt "github.com/stv0g/gont/pkg/options/capture"
-	"go.uber.org/zap"
-
-	"github.com/stv0g/cunicu/pkg/util"
-	"github.com/stv0g/cunicu/test"
-	"github.com/stv0g/cunicu/test/e2e/nodes"
 )
 
-var (
-	logger *zap.Logger
-)
+var logger *log.Logger
 
 type Network struct {
 	*g.Network
 
 	Name string
 
-	NetworkOptions            []g.Option
+	NetworkOptions            []g.NetworkOption
 	AgentOptions              []g.Option
 	WireGuardInterfaceOptions []g.Option
 
@@ -60,7 +62,7 @@ func (n *Network) Start() {
 	})
 	Expect(err).To(Succeed(), "Failed to configure WireGuard interface: %s", err)
 
-	if setup {
+	if options.setup {
 		Skip("Aborting test as only network setup has been requested")
 	}
 
@@ -71,7 +73,7 @@ func (n *Network) Start() {
 	By("Writing network hosts file")
 
 	hfn := filepath.Join(n.BasePath, "hosts")
-	hf, err := os.OpenFile(hfn, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	hf, err := os.OpenFile(hfn, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	Expect(err).To(Succeed(), "Failed to open hosts file: %s", err)
 
 	err = n.Network.WriteHostsFile(hf)
@@ -83,13 +85,14 @@ func (n *Network) Start() {
 	By("Saving network nodes file")
 
 	nfn := filepath.Join(n.BasePath, "nodes")
-	nf, err := os.OpenFile(nfn, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	nf, err := os.OpenFile(nfn, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	Expect(err).To(Succeed(), "Failed to open nodes file: %s", err)
 
-	n.AgentNodes.ForEachInterface(func(i *nodes.WireGuardInterface) error {
+	err = n.AgentNodes.ForEachInterface(func(i *nodes.WireGuardInterface) error {
 		_, err := fmt.Fprintf(nf, "%s %s %s\n", i.Agent.Name(), i.Name, i.PrivateKey.PublicKey())
 		return err
 	})
+	Expect(err).To(Succeed())
 
 	err = nf.Close()
 	Expect(err).To(Succeed(), "Failed to close nodes file: %s", err)
@@ -116,14 +119,14 @@ func (n *Network) AgentArgs() []any {
 	if len(n.RelayNodes) > 0 {
 		// TODO: We currently assume that all relays use the same credentials
 		extraArgs = append(extraArgs,
-			"--username", n.RelayNodes[0].Username(),
-			"--password", n.RelayNodes[0].Password(),
+			"--ice-username", n.RelayNodes[0].Username(),
+			"--ice-password", n.RelayNodes[0].Password(),
 		)
 	}
 
 	for _, r := range n.RelayNodes {
 		for _, u := range r.URLs() {
-			extraArgs = append(extraArgs, "--url", u)
+			extraArgs = append(extraArgs, "--ice-url", u)
 		}
 	}
 
@@ -168,11 +171,11 @@ func (n *Network) WriteSpecReport() {
 	reportJSON, err := report.MarshalJSON()
 	Expect(err).To(Succeed(), "Failed to marshal report: %s", err)
 
-	reportJSON, err = util.ReIndentJSON(reportJSON, "", "  ")
+	reportJSON, err = tty.ReIndentJSON(reportJSON, "", "  ")
 	Expect(err).To(Succeed(), "Failed to indent report: %s", err)
 
 	reportFileName := filepath.Join(n.BasePath, "report.json")
-	reportFile, err := os.OpenFile(reportFileName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	reportFile, err := os.OpenFile(reportFileName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	Expect(err).To(Succeed(), "Failed to open report file: %s", err)
 
 	_, err = reportFile.Write(reportJSON)
@@ -183,23 +186,25 @@ func (n *Network) ConnectivityTests() {
 	It("", func() {
 		By("Waiting until all peers are connected")
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), options.timeout)
 		defer cancel()
 
 		err := n.AgentNodes.WaitConnectionsReady(ctx)
 		Expect(err).To(Succeed(), "Failed to wait for peers to connect: %s", err)
 
-		By("Ping between all peers")
+		By("Ping between all peers started")
 
 		err = n.AgentNodes.PingPeers(ctx)
 		Expect(err).To(Succeed(), "Failed to ping peers: %s", err)
+
+		By("Ping between all peers succeeded")
 	})
 }
 
 func (n *Network) Init() {
 	*n = Network{}
 
-	n.Name = fmt.Sprintf("cunicu-%d", rand.Uint32())
+	n.Name = fmt.Sprintf("cunicu-%d", rand.Uint32()) //nolint:gosec
 	n.BasePath = filepath.Join(SpecName()...)
 	n.BasePath = filepath.Join("logs", n.BasePath)
 
@@ -208,13 +213,16 @@ func (n *Network) Init() {
 
 	By("Tweaking sysctls for large Gont networks")
 
-	err := util.SetSysctlMap(map[string]any{
+	err := osx.SetSysctlMap(map[string]any{
 		"net.ipv4.neigh.default.gc_thresh1": 10000,
 		"net.ipv4.neigh.default.gc_thresh2": 15000,
 		"net.ipv4.neigh.default.gc_thresh3": 20000,
 		"net.ipv6.neigh.default.gc_thresh1": 10000,
 		"net.ipv6.neigh.default.gc_thresh2": 15000,
 		"net.ipv6.neigh.default.gc_thresh3": 20000,
+		"net.core.rmem_max":                 32 << 20,
+		"net.core.wmem_max":                 32 << 20,
+		"net.core.rmem_default":             32 << 20,
 	})
 	Expect(err).To(Succeed(), "Failed to set sysctls: %s", err)
 
@@ -225,23 +233,24 @@ func (n *Network) Init() {
 
 	By("Creating directory for new test case results")
 
-	err = os.MkdirAll(n.BasePath, 0755)
+	err = os.MkdirAll(n.BasePath, 0o755)
 	Expect(err).To(Succeed(), "Failed to create test case result directory: %s", err)
 
 	// Ginkgo log
-	logger = test.SetupLoggingWithFile(logFilename, true)
+	logger, err = test.SetupLoggingWithFile(logFilename, true)
+	Expect(err).To(Succeed())
 
 	n.AgentOptions = append(n.AgentOptions,
-		gopt.LogToDebug(false),
+		gopt.RedirectToLog(false),
 	)
 
 	n.NetworkOptions = append(n.NetworkOptions,
-		gopt.Persistent(persist),
+		gopt.Persistent(options.persist),
 	)
 
-	if capture {
+	if options.capture {
 		n.NetworkOptions = append(n.NetworkOptions,
-			gopt.CaptureAll(
+			g.NewCapture(
 				copt.Filename(pcapFilename),
 				copt.LogKeys(true),
 			),

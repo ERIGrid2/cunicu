@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package core
 
 import (
@@ -5,19 +8,20 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/stv0g/cunicu/pkg/util"
-	t "github.com/stv0g/cunicu/pkg/util/terminal"
-	"github.com/stv0g/cunicu/pkg/wg"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
+
+	"github.com/stv0g/cunicu/pkg/log"
+	"github.com/stv0g/cunicu/pkg/tty"
+	"github.com/stv0g/cunicu/pkg/wg"
 )
 
-func (i *Interface) Device() *wg.Device {
+func (i *Interface) Device() *wg.Interface {
 	peers := []wgtypes.Peer{}
 	for _, peer := range i.Peers {
 		peers = append(peers, peer.Peer())
 	}
 
-	return &wg.Device{
+	return &wg.Interface{
 		Name:         i.Name,
 		Type:         wgtypes.DeviceType(i.Type),
 		PublicKey:    *(*wgtypes.Key)(i.PublicKey),
@@ -30,55 +34,55 @@ func (i *Interface) Device() *wg.Device {
 
 // Dump writes a human readable version of the interface status to the supplied writer.
 // The format resembles the one used by wg(8).
-func (i *Interface) Dump(wr io.Writer, verbosity int) error {
-	wri := t.NewIndenter(wr, "  ")
+func (i *Interface) Dump(wr io.Writer, level log.Level) error {
+	wri := tty.NewIndenter(wr, "  ")
 
-	if _, err := fmt.Fprintf(wr, t.Color("interface", t.Bold, t.FgGreen)+": "+t.Color("%s", t.FgGreen)+"\n", i.Name); err != nil {
+	if _, err := fmt.Fprintf(wr, tty.Mods("interface", tty.Bold, tty.FgGreen)+": "+tty.Mods("%s", tty.FgGreen)+"\n", i.Name); err != nil {
 		return err
 	}
 
-	if _, err := t.FprintKV(wri, "public key", base64.StdEncoding.EncodeToString(i.PublicKey)); err != nil {
+	if _, err := tty.FprintKV(wri, "public key", base64.StdEncoding.EncodeToString(i.PublicKey)); err != nil {
 		return err
 	}
 
-	if verbosity > 2 {
-		if _, err := t.FprintKV(wri, "private key", base64.StdEncoding.EncodeToString(i.PrivateKey)); err != nil {
+	if level.Verbosity() > 5 {
+		if _, err := tty.FprintKV(wri, "private key", base64.StdEncoding.EncodeToString(i.PrivateKey)); err != nil {
 			return err
 		}
 	}
 
-	if _, err := t.FprintKV(wri, "listening port", i.ListenPort); err != nil {
+	if _, err := tty.FprintKV(wri, "listening port", i.ListenPort); err != nil {
 		return err
 	}
 
 	if i.FirewallMark != 0 {
-		if _, err := t.FprintKV(wri, "fwmark", i.FirewallMark); err != nil {
+		if _, err := tty.FprintKV(wri, "fwmark", i.FirewallMark); err != nil {
 			return err
 		}
 	}
 
-	if _, err := t.FprintKV(wri, "type", i.Type); err != nil {
+	if _, err := tty.FprintKV(wri, "type", i.Type); err != nil {
 		return err
 	}
 
-	if _, err := t.FprintKV(wri, "ifindex", i.Ifindex); err != nil {
+	if _, err := tty.FprintKV(wri, "ifindex", i.Ifindex); err != nil {
 		return err
 	}
 
-	if _, err := t.FprintKV(wri, "mtu", i.Mtu); err != nil {
+	if _, err := tty.FprintKV(wri, "mtu", i.Mtu); err != nil {
 		return err
 	}
 
-	if _, err := t.FprintKV(wri, "latest sync", util.Ago(i.LastSyncTimestamp.Time())); err != nil {
+	if _, err := tty.FprintKV(wri, "latest sync", tty.Ago(i.LastSyncTimestamp.Time())); err != nil {
 		return err
 	}
 
-	if i.Ice != nil && verbosity > 3 {
+	if i.Ice != nil && level.Verbosity() > 3 {
 		if _, err := fmt.Fprintln(wr); err != nil {
 			return err
 		}
 
-		if err := i.Ice.Dump(wri, verbosity); err != nil {
+		if err := i.Ice.Dump(wri, level); err != nil {
 			return err
 		}
 	}
@@ -88,7 +92,7 @@ func (i *Interface) Dump(wr io.Writer, verbosity int) error {
 			return err
 		}
 
-		if err := p.Dump(wri, verbosity); err != nil {
+		if err := p.Dump(wri, level); err != nil {
 			return err
 		}
 	}

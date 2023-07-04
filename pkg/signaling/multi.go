@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package signaling
 
 import (
@@ -5,7 +8,6 @@ import (
 	"net/url"
 
 	"github.com/stv0g/cunicu/pkg/crypto"
-
 	signalingproto "github.com/stv0g/cunicu/pkg/proto/signaling"
 )
 

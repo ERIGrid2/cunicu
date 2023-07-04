@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package nodes
 
 import (
@@ -5,19 +8,18 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
-	g "github.com/stv0g/gont/pkg"
+	g "github.com/stv0g/gont/v2/pkg"
+	copt "github.com/stv0g/gont/v2/pkg/options/cmd"
 	"go.uber.org/zap"
 	"golang.zx2c4.com/wireguard/wgctrl"
 
 	"github.com/stv0g/cunicu/pkg/crypto"
-	"github.com/stv0g/cunicu/pkg/rpc"
-	"github.com/stv0g/cunicu/pkg/wg"
-
+	"github.com/stv0g/cunicu/pkg/log"
 	rpcproto "github.com/stv0g/cunicu/pkg/proto/rpc"
+	"github.com/stv0g/cunicu/pkg/rpc"
 )
 
 type AgentOption interface {
@@ -31,7 +33,7 @@ type AgentOption interface {
 type Agent struct {
 	*g.Host
 
-	Command *exec.Cmd
+	Command *g.Cmd
 	Client  *rpc.Client
 
 	WireGuardClient *wgctrl.Client
@@ -39,13 +41,9 @@ type Agent struct {
 	ExtraArgs           []any
 	WireGuardInterfaces []*WireGuardInterface
 
-	// Path of a wg-quick(8) configuration file describing the interface rather than a kernel device
-	// Will only be created if non-empty
-	WireGuardConfigPath string
-
 	logFile io.WriteCloser
 
-	logger *zap.Logger
+	logger *log.Logger
 }
 
 func NewAgent(m *g.Network, name string, opts ...g.Option) (*Agent, error) {
@@ -57,11 +55,7 @@ func NewAgent(m *g.Network, name string, opts ...g.Option) (*Agent, error) {
 	a := &Agent{
 		Host: h,
 
-		WireGuardInterfaces: []*WireGuardInterface{},
-		WireGuardConfigPath: wg.ConfigPath,
-		ExtraArgs:           []any{},
-
-		logger: zap.L().Named("node.agent").With(zap.String("node", name)),
+		logger: log.Global.Named("node.agent").With(zap.String("node", name)),
 	}
 
 	// Apply agent options
@@ -84,9 +78,8 @@ func NewAgent(m *g.Network, name string, opts ...g.Option) (*Agent, error) {
 
 func (a *Agent) Start(_, dir string, extraArgs ...any) error {
 	var err error
-	var stdout, stderr io.Reader
-	var rpcSockPath = fmt.Sprintf("/var/run/cunicu.%s.sock", a.Name())
-	var logPath = fmt.Sprintf("%s/%s.log", dir, a.Name())
+	rpcSockPath := fmt.Sprintf("/var/run/cunicu.%s.sock", a.Name())
+	logPath := fmt.Sprintf("%s/%s.log", dir, a.Name())
 
 	// Old RPC sockets are also removed by cunīcu.
 	// However we also need to do it here to avoid racing
@@ -95,9 +88,14 @@ func (a *Agent) Start(_, dir string, extraArgs ...any) error {
 		return fmt.Errorf("failed to remove old socket: %w", err)
 	}
 
-	binary, profileArgs, err := BuildTestBinary(a.Name())
+	binary, profileArgs, err := BuildBinary(a.Name())
 	if err != nil {
 		return fmt.Errorf("failed to build: %w", err)
+	}
+
+	a.logFile, err = os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to open log file: %w", err)
 	}
 
 	args := profileArgs
@@ -106,34 +104,31 @@ func (a *Agent) Start(_, dir string, extraArgs ...any) error {
 		"--rpc-socket", rpcSockPath,
 		"--rpc-wait",
 		"--log-level", "debug",
-		"--host-sync=false",
-		"--config-path", a.WireGuardConfigPath,
+		"--sync-hosts=false",
 	)
 	args = append(args, a.ExtraArgs...)
 	args = append(args, extraArgs...)
+	args = append(args,
+		copt.Combined(a.logFile),
+		copt.Dir(dir),
+		copt.EnvVar("CUNICU_EXPERIMENTAL", "1"),
+		// copt.EnvVar("PION_LOG", "info"),
+		copt.EnvVar("GRPC_GO_LOG_SEVERITY_LEVEL", "debug"),
+		copt.EnvVar("GRPC_GO_LOG_VERBOSITY_LEVEL", fmt.Sprintf("%d", 99)),
+	)
 
-	env := []string{
-		// "PION_LOG=debug",
-		fmt.Sprintf("GORACE=log_path=%s-race.log", a.Name()),
-	}
-
-	if stdout, stderr, a.Command, err = a.StartWith(binary, env, dir, args...); err != nil {
+	if a.Command, err = a.Host.Start(binary, args...); err != nil {
 		return fmt.Errorf("failed to start: %w", err)
 	}
 
-	multi := io.MultiReader(stdout, stderr)
-
-	//#nosec G304 -- Test code is not controllable by attackers
-	//#nosec G302 -- Log file should be readable by user
-	a.logFile, err = os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open log file: %w", err)
-	}
-
-	go io.Copy(a.logFile, multi)
-
 	if a.Client, err = rpc.Connect(rpcSockPath); err != nil {
 		return fmt.Errorf("failed to connect to to control socket: %w", err)
+	}
+
+	a.Client.AddEventHandler(a)
+
+	if err := a.Client.Unwait(); err != nil {
+		return fmt.Errorf("failed to unwait agent: %w", err)
 	}
 
 	return nil
@@ -154,13 +149,17 @@ func (a *Agent) Stop() error {
 		return fmt.Errorf("failed to close log file: %w", err)
 	}
 
+	if err := a.Client.Close(); err != nil {
+		return fmt.Errorf("failed to close RPC connection: %w", err)
+	}
+
 	return nil
 }
 
 func (a *Agent) Close() error {
 	if a.Client != nil {
 		if err := a.Client.Close(); err != nil {
-			return fmt.Errorf("failed to close RPC connection: %s", err)
+			return fmt.Errorf("failed to close RPC connection: %w", err)
 		}
 	}
 
@@ -191,4 +190,12 @@ func (a *Agent) Shadowed(path string) string {
 	}
 
 	return path
+}
+
+func (a *Agent) OnEvent(e *rpcproto.Event) {
+	if e.Type == rpcproto.EventType_PEER_STATE_CHANGED {
+		return // be less verbose
+	}
+
+	a.logger.Info("New event", zap.Any("event", e))
 }

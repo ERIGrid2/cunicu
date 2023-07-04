@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 // Package main implements the command line interface
 package main
 
@@ -6,11 +9,9 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/stv0g/cunicu/pkg/config"
+
 	"github.com/stv0g/cunicu/pkg/log"
-	"github.com/stv0g/cunicu/pkg/util"
-	"github.com/stv0g/cunicu/pkg/util/terminal"
-	"go.uber.org/zap/zapcore"
+	"github.com/stv0g/cunicu/pkg/tty"
 )
 
 const (
@@ -49,49 +50,66 @@ Code & Issues:
 `
 )
 
+type options struct {
+	logFilter string
+	logFile   string
+	colorMode string
+}
+
 var (
-	rootCmd = &cobra.Command{
+	logger *log.Logger //nolint:gochecknoglobals
+	color  bool        //nolint:gochecknoglobals
+	stdout io.Writer   //nolint:gochecknoglobals
+
+	rootCmd = &cobra.Command{ //nolint:gochecknoglobals
 		Use:   "cunicu",
 		Short: "cunīcu is a user-space daemon managing WireGuard® interfaces to establish peer-to-peer connections in harsh network environments.",
-		Long:  `It relies on the awesome pion/ice package for the interactive connectivity establishment as well as bundles the Go user-space implementation of WireGuard in a single binary for environments in which WireGuard kernel support has not landed yet.`,
+		Long: Banner(tty.IsATTY(os.Stdout)) + `cunīcu is a user-space daemon managing WireGuard® interfaces to
+establish peer-to-peer connections in harsh network environments.
+
+It relies on the awesome pion/ice package for the interactive
+connectivity establishment as well as bundles the Go user-space
+implementation of WireGuard in a single binary for environments
+in which WireGuard kernel support has not landed yet.`,
 
 		DisableAutoGenTag: true,
+		SilenceUsage:      true,
+		Args:              cobra.NoArgs,
+		ValidArgsFunction: cobra.NoFileCompletions,
 	}
-
-	logLevel       = config.Level{Level: zapcore.InfoLevel}
-	verbosityLevel int
-	logFile        string
-	colorMode      string
-	color          bool
-	stdout         io.Writer
 )
 
-func init() {
+func init() { //nolint:gochecknoinits
+	opts := &options{}
+
 	rootCmd.SetUsageTemplate(usageTemplate)
 
-	cobra.OnInitialize(onInitialize)
+	cobra.OnInitialize(func() {
+		onInitialize(opts)
+	})
 
 	f := rootCmd.Flags()
 	f.SortFlags = false
 
 	pf := rootCmd.PersistentFlags()
-	pf.IntVarP(&verbosityLevel, "verbose", "v", 0, "verbosity level")
-	pf.VarP(&logLevel, "log-level", "d", "log level (one of: debug, info, warn, error, dpanic, panic, and fatal)")
-	pf.StringVarP(&logFile, "log-file", "l", "", "path of a file to write logs to")
-	pf.StringVarP(&colorMode, "color", "C", "auto", "Enable colorization of output (one of: auto, always, never)")
+	pf.StringVarP(&opts.logFilter, "log-level", "d", "info", "log level filter rule (one of: debug, info, warn, error, dpanic, panic, and fatal)")
+	pf.StringVarP(&opts.logFile, "log-file", "l", "", "path of a file to write logs to")
+	pf.StringVarP(&opts.colorMode, "color", "q", "auto", "Enable colorization of output (one of: auto, always, never)")
 
-	daemonCmd.RegisterFlagCompletionFunc("log-level", cobra.FixedCompletions([]string{"debug", "info", "warn", "error", "dpanic", "panic", "fatal"}, cobra.ShellCompDirectiveNoFileComp))
-	daemonCmd.RegisterFlagCompletionFunc("color", cobra.FixedCompletions([]string{"auto", "always", "never"}, cobra.ShellCompDirectiveNoFileComp))
+	if err := rootCmd.RegisterFlagCompletionFunc("log-level", cobra.FixedCompletions([]string{"debug", "info", "warn", "error", "dpanic", "panic", "fatal"}, cobra.ShellCompDirectiveNoFileComp)); err != nil {
+		panic(err)
+	}
+
+	if err := rootCmd.RegisterFlagCompletionFunc("color", cobra.FixedCompletions([]string{"auto", "always", "never"}, cobra.ShellCompDirectiveNoFileComp)); err != nil {
+		panic(err)
+	}
 }
 
-func onInitialize() {
-	// Initialize PRNG
-	util.SetupRand()
-
+func onInitialize(opts *options) {
 	// Handle color output
-	switch colorMode {
+	switch opts.colorMode {
 	case "auto":
-		color = util.IsATTY(os.Stdout)
+		color = tty.IsATTY(os.Stdout)
 	case "always":
 		color = true
 	case "never":
@@ -100,19 +118,21 @@ func onInitialize() {
 
 	stdout = os.Stdout
 	if !color {
-		stdout = terminal.NewANSIStripper(stdout)
+		stdout = tty.NewANSIStripper(stdout)
 	}
 
 	// Setup logging
 	outputPaths := []string{"stdout"}
-	errOutputPaths := []string{"stderr"}
 
-	if logFile != "" {
-		outputPaths = append(outputPaths, logFile)
-		errOutputPaths = append(errOutputPaths, logFile)
+	if opts.logFile != "" {
+		outputPaths = append(outputPaths, opts.logFile)
 	}
 
-	logger = log.SetupLogging(logLevel.Level, verbosityLevel, outputPaths, errOutputPaths, color)
+	var err error
+	logger, err = log.SetupLogging(opts.logFilter, outputPaths, color)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func main() {

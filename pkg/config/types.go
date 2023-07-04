@@ -1,33 +1,14 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strings"
-
-	"github.com/stv0g/cunicu/pkg/crypto"
-	"go.uber.org/zap/zapcore"
 )
-
-type Regexp struct {
-	regexp.Regexp
-}
-
-func (r *Regexp) UnmarshalText(text []byte) error {
-	re, err := regexp.Compile(string(text))
-	if err != nil {
-		return err
-	}
-
-	r.Regexp = *re
-
-	return nil
-}
-
-func (r *Regexp) MarshalText() ([]byte, error) {
-	return []byte(r.String()), nil
-}
 
 type BackendURL struct {
 	url.URL
@@ -74,7 +55,8 @@ func (u *URL) UnmarshalText(text []byte) error {
 }
 
 func (u URL) MarshalText() ([]byte, error) {
-	return []byte(u.String()), nil
+	s := u.String()
+	return []byte(s), nil
 }
 
 type OutputFormat string
@@ -85,27 +67,24 @@ const (
 	OutputFormatHuman  OutputFormat = "human"
 )
 
-var (
-	OutputFormats = []OutputFormat{
-		OutputFormatJSON,
-		OutputFormatLogger,
-		OutputFormatHuman,
-	}
-)
+//nolint:gochecknoglobals
+var OutputFormats = []OutputFormat{
+	OutputFormatJSON,
+	OutputFormatLogger,
+	OutputFormatHuman,
+}
+
+var errUnknownFormat = errors.New("unknown output format")
 
 func (f *OutputFormat) UnmarshalText(text []byte) error {
 	*f = OutputFormat(text)
 
 	switch *f {
-	case OutputFormatJSON:
-		fallthrough
-	case OutputFormatLogger:
-		fallthrough
-	case OutputFormatHuman:
+	case OutputFormatJSON, OutputFormatLogger, OutputFormatHuman:
 		return nil
 	}
 
-	return fmt.Errorf("unknown output format: %s", string(text))
+	return fmt.Errorf("%w: %s", errUnknownFormat, string(text))
 }
 
 func (f OutputFormat) MarshalText() ([]byte, error) {
@@ -122,29 +101,4 @@ func (f *OutputFormat) Set(str string) error {
 
 func (f *OutputFormat) Type() string {
 	return "string"
-}
-
-type Level struct {
-	zapcore.Level
-}
-
-func (l *Level) Type() string {
-	return "string"
-}
-
-type Key crypto.Key
-
-func (k *Key) UnmarshalText(text []byte) error {
-	l, err := crypto.ParseKey(string(text))
-	if err != nil {
-		return err
-	}
-
-	*k = Key(l)
-
-	return nil
-}
-
-func (k Key) MarshalText() ([]byte, error) {
-	return []byte(crypto.Key(k).String()), nil
 }

@@ -1,25 +1,27 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package grpc
 
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"time"
 
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/keepalive"
 
+	"github.com/stv0g/cunicu/pkg/buildinfo"
 	"github.com/stv0g/cunicu/pkg/crypto"
+	"github.com/stv0g/cunicu/pkg/log"
 	"github.com/stv0g/cunicu/pkg/proto"
-	"github.com/stv0g/cunicu/pkg/signaling"
-	"github.com/stv0g/cunicu/pkg/util/buildinfo"
-
 	signalingproto "github.com/stv0g/cunicu/pkg/proto/signaling"
+	"github.com/stv0g/cunicu/pkg/signaling"
 )
 
 type Server struct {
@@ -29,36 +31,15 @@ type Server struct {
 
 	*grpc.Server
 
-	logger *zap.Logger
+	logger *log.Logger
 }
 
-func NewServer(opts ...grpc.ServerOption) *Server {
-	logger := zap.L().Named("server")
-
-	if fn := os.Getenv("SSLKEYLOGFILE"); fn != "" {
-		//#nosec G304 -- Filename is only controlled via env var
-		wr, err := os.OpenFile(fn, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-		if err != nil {
-			logger.Fatal("Failed to open SSL keylog file", zap.Error(err))
-		}
-
-		opts = slices.Clone(opts)
-		opts = append(opts,
-			grpc.Creds(
-				credentials.NewTLS(&tls.Config{
-					MinVersion:   tls.VersionTLS13,
-					KeyLogWriter: wr,
-				}),
-			),
-			grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-				MinTime: 5 * time.Second,
-			}),
-		)
-	}
+func NewSignalingServer(opts ...grpc.ServerOption) *Server {
+	logger := log.Global.Named("grpc.server")
 
 	s := &Server{
 		topicRegistry: topicRegistry{
-			topics: map[crypto.Key]*topic{},
+			topics: map[crypto.Key]*Topic{},
 		},
 		Server: grpc.NewServer(opts...),
 		logger: logger,
@@ -67,6 +48,31 @@ func NewServer(opts ...grpc.ServerOption) *Server {
 	signalingproto.RegisterSignalingServer(s, s)
 
 	return s
+}
+
+func NewServer(opts ...grpc.ServerOption) (*grpc.Server, error) {
+	opts = slices.Clone(opts)
+	opts = append(opts,
+		grpc.MaxConcurrentStreams(10000),
+	)
+
+	if fn := os.Getenv("SSLKEYLOGFILE"); fn != "" {
+		wr, err := os.OpenFile(fn, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open SSL keylog file: %w", err)
+		}
+
+		opts = append(opts,
+			grpc.Creds(
+				credentials.NewTLS(&tls.Config{
+					MinVersion:   tls.VersionTLS13,
+					KeyLogWriter: wr,
+				}),
+			),
+		)
+	}
+
+	return grpc.NewServer(opts...), nil
 }
 
 func (s *Server) Subscribe(params *signalingproto.SubscribeParams, stream signalingproto.Signaling_SubscribeServer) error {
@@ -84,8 +90,11 @@ func (s *Server) Subscribe(params *signalingproto.SubscribeParams, stream signal
 	// has been created. This avoids a race between Subscribe() & Publish() from the
 	// clients view-point.
 	if err := stream.Send(&signalingproto.Envelope{}); err != nil {
-		s.logger.Error("Failed to send sync envelope", zap.Error(err))
+		return fmt.Errorf("failed to send sync envelope: %w", err)
 	}
+
+	s.logger.Debug("Subscription stream opened",
+		zap.Any("recipient", pk))
 
 out:
 	for {
@@ -95,7 +104,11 @@ out:
 				break out
 			}
 
-			if err := stream.Send(env); err == io.EOF {
+			s.logger.Debug("Sending envelope to subscriber",
+				zap.Any("recipient", env.Recipient),
+				zap.Any("sender", env.Sender))
+
+			if err := stream.Send(env); errors.Is(err, io.EOF) {
 				break out
 			} else if err != nil {
 				s.logger.Error("Failed to send envelope", zap.Error(err))
@@ -106,10 +119,13 @@ out:
 		}
 	}
 
+	s.logger.Debug("Subscription stream closed",
+		zap.Any("recipient", pk))
+
 	return nil
 }
 
-func (s *Server) Publish(ctx context.Context, env *signaling.Envelope) (*proto.Empty, error) {
+func (s *Server) Publish(_ context.Context, env *signaling.Envelope) (*proto.Empty, error) {
 	var err error
 	var pkRecipient, pkSender crypto.Key
 
@@ -122,6 +138,10 @@ func (s *Server) Publish(ctx context.Context, env *signaling.Envelope) (*proto.E
 	}
 
 	t := s.getTopic(&pkRecipient)
+
+	s.logger.Debug("Start publishing envelope",
+		zap.Any("recipient", pkRecipient),
+		zap.Any("sender", pkSender))
 
 	t.Publish(env)
 

@@ -1,9 +1,13 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package wg
 
 import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -12,6 +16,9 @@ import (
 
 type Config struct {
 	wgtypes.Config
+
+	PeerEndpoints []string
+	PeerNames     []string
 
 	Address    []net.IPNet
 	DNS        []net.IPAddr
@@ -60,10 +67,22 @@ func parseCIDRs(nets []string, ip bool) ([]net.IPNet, error) {
 	for _, ne := range nets {
 		i, n, err := net.ParseCIDR(ne)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse network %s: %w", ne, err)
-		}
+			// Try parsing URL without CIDR suffix
+			i := net.ParseIP(ne)
+			if i == nil {
+				return nil, fmt.Errorf("failed to parse network %s: %w", ne, err)
+			}
 
-		if ip {
+			n = &net.IPNet{
+				IP: i,
+			}
+
+			if isV4 := i.To4() != nil; isV4 {
+				n.Mask = net.CIDRMask(32, 32)
+			} else {
+				n.Mask = net.CIDRMask(128, 128)
+			}
+		} else if ip {
 			n.IP = i
 		}
 
@@ -124,7 +143,7 @@ func (cfg *Config) Dump(wr io.Writer) error {
 		}
 	}
 
-	for _, peer := range cfg.Peers {
+	for i, peer := range cfg.Peers {
 		iniPeer := peerConfig{
 			PublicKey: peer.PublicKey.String(),
 		}
@@ -134,7 +153,9 @@ func (cfg *Config) Dump(wr io.Writer) error {
 			iniPeer.PresharedKey = &psk
 		}
 
-		if peer.Endpoint != nil {
+		if cfg.PeerEndpoints != nil && cfg.PeerEndpoints[i] != "" {
+			iniPeer.Endpoint = &cfg.PeerEndpoints[i]
+		} else if peer.Endpoint != nil {
 			ep := peer.Endpoint.String()
 			iniPeer.Endpoint = &ep
 		}
@@ -163,18 +184,26 @@ func (cfg *Config) Dump(wr io.Writer) error {
 		return err
 	}
 
+	if cfg.PeerNames != nil {
+		if peerSections, err := iniFile.SectionsByName("Peer"); err == nil {
+			for i, peerSection := range peerSections {
+				peerSection.Comment = fmt.Sprintf("# %s", cfg.PeerNames[i])
+			}
+		}
+	}
+
 	_, err := iniFile.WriteTo(wr)
 
 	return err
 }
 
-func ParseConfig(rd io.Reader, name string) (*Config, error) {
+func ParseConfig(data []byte) (*Config, error) {
 	var err error
 
 	iniFile, err := ini.LoadSources(ini.LoadOptions{
 		AllowNonUniqueSections: true,
 		AllowShadows:           true,
-	}, rd)
+	}, data)
 	if err != nil {
 		return nil, err
 	}
@@ -182,12 +211,14 @@ func ParseConfig(rd io.Reader, name string) (*Config, error) {
 	// We add a pseudo peer section just allow mapping via StrictMapTo if there are no peers configured
 	fakePeer := !iniFile.HasSection("Peer")
 	if fakePeer {
-		iniFile.NewSection("Peer")
+		if _, err := iniFile.NewSection("Peer"); err != nil {
+			return nil, fmt.Errorf("failed to create new peer section: %w", err)
+		}
 	}
 
 	iniCfg := &config{}
 	if err := iniFile.StrictMapTo(iniCfg); err != nil {
-		return nil, fmt.Errorf("failed to parse Interface section: %s", err)
+		return nil, fmt.Errorf("failed to parse Interface section: %w", err)
 	}
 
 	// Remove fake peer section again
@@ -195,12 +226,29 @@ func ParseConfig(rd io.Reader, name string) (*Config, error) {
 		iniCfg.Peers = nil
 	}
 
-	return iniCfg.Config()
+	peerSects, err := iniFile.SectionsByName("Peer")
+	if err != nil {
+		return nil, err
+	}
+
+	cfg, err := iniCfg.Config()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, peerSect := range peerSects {
+		peerName := strings.TrimPrefix(peerSect.Comment, "#")
+		peerName = strings.TrimSpace(peerName)
+
+		cfg.PeerNames = append(cfg.PeerNames, peerName)
+	}
+
+	return cfg, nil
 }
 
 func (c *config) Config() (*Config, error) {
 	var err error
-	var cfg = &Config{
+	cfg := &Config{
 		Config: wgtypes.Config{
 			Peers:        []wgtypes.PeerConfig{},
 			ListenPort:   c.Interface.ListenPort,
@@ -245,6 +293,12 @@ func (c *config) Config() (*Config, error) {
 		}
 
 		cfg.Peers = append(cfg.Peers, *peerCfg)
+
+		if pSection.Endpoint != nil {
+			cfg.PeerEndpoints = append(cfg.PeerEndpoints, *pSection.Endpoint)
+		} else {
+			cfg.PeerEndpoints = append(cfg.PeerEndpoints, "")
+		}
 	}
 
 	return cfg, nil

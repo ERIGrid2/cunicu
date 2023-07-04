@@ -1,19 +1,27 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package grpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/stv0g/cunicu/pkg/crypto"
-	"github.com/stv0g/cunicu/pkg/signaling"
-
+	"github.com/stv0g/cunicu/pkg/log"
+	"github.com/stv0g/cunicu/pkg/proto"
 	signalingproto "github.com/stv0g/cunicu/pkg/proto/signaling"
+	"github.com/stv0g/cunicu/pkg/signaling"
 )
 
-func init() {
+func init() { //nolint:gochecknoinits
 	signaling.Backends["grpc"] = &signaling.BackendPlugin{
 		New:         NewBackend,
 		Description: "gRPC",
@@ -28,10 +36,10 @@ type Backend struct {
 
 	config BackendConfig
 
-	logger *zap.Logger
+	logger *log.Logger
 }
 
-func NewBackend(cfg *signaling.BackendConfig, logger *zap.Logger) (signaling.Backend, error) {
+func NewBackend(cfg *signaling.BackendConfig, logger *log.Logger) (signaling.Backend, error) {
 	var err error
 
 	b := &Backend{
@@ -43,11 +51,26 @@ func NewBackend(cfg *signaling.BackendConfig, logger *zap.Logger) (signaling.Bac
 		return nil, fmt.Errorf("failed to parse backend configuration: %w", err)
 	}
 
+	// TODO: Use DialWithContext
 	if b.conn, err = grpc.Dial(b.config.Target, b.config.Options...); err != nil {
 		return nil, fmt.Errorf("failed to connect to gRPC server: %w", err)
 	}
 
 	b.client = signalingproto.NewSignalingClient(b.conn)
+
+	bi, err := b.client.GetBuildInfo(context.Background(), &proto.Empty{}, grpc.WaitForReady(true))
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to GRPC signaling server: %w", err)
+	}
+
+	b.logger.Debug("Connected to GRPC signaling server",
+		zap.String("server_arch", bi.Arch),
+		zap.String("server_version", bi.Version),
+		zap.String("server_commit", bi.Commit),
+		zap.String("server_tag", bi.Tag),
+		zap.String("server_branch", bi.Branch),
+		zap.String("server_os", bi.Os),
+	)
 
 	for _, h := range cfg.OnReady {
 		h.OnSignalingBackendReady(b)
@@ -91,7 +114,11 @@ func (b *Backend) Publish(ctx context.Context, kp *crypto.KeyPair, msg *signalin
 		return fmt.Errorf("failed to encrypt message: %w", err)
 	}
 
-	if _, err = b.client.Publish(ctx, env); err != nil {
+	if _, err = b.client.Publish(ctx, env, grpc.WaitForReady(true)); err != nil {
+		if status.Code(err) == codes.Canceled {
+			return signaling.ErrClosed
+		}
+
 		return fmt.Errorf("failed to publish message: %w", err)
 	}
 
@@ -113,14 +140,14 @@ func (b *Backend) subscribeFromServer(ctx context.Context, pk *crypto.Key) error
 
 	stream, err := b.client.Subscribe(ctx, params, grpc.WaitForReady(true))
 	if err != nil {
-		return fmt.Errorf("failed to subscribe to offers: %s", err)
+		return fmt.Errorf("failed to subscribe to offers: %w", err)
 	}
 
 	// Wait until subscription has been created
 	// This avoids a race between Subscribe() / Publish() when two subscribers are subscribing
 	// to each other.
 	if _, err := stream.Recv(); err != nil {
-		return fmt.Errorf("failed receive synchronization envelope: %s", err)
+		return fmt.Errorf("failed receive synchronization envelope: %w", err)
 	}
 
 	b.logger.Debug("Created new subscription", zap.Any("pk", pk))
@@ -129,13 +156,15 @@ func (b *Backend) subscribeFromServer(ctx context.Context, pk *crypto.Key) error
 		for {
 			env, err := stream.Recv()
 			if err != nil {
-				b.logger.Error("Subscription stream closed. Re-subscribing..", zap.Error(err))
+				if !errors.Is(err, io.EOF) && status.Code(err) != codes.Canceled {
+					b.logger.Error("Subscription stream closed. Re-subscribing..", zap.Error(err))
 
-				if err := b.subscribeFromServer(ctx, pk); err != nil {
-					b.logger.Error("Failed to resubscribe", zap.Error(err))
+					if err := b.subscribeFromServer(ctx, pk); err != nil && status.Code(err) != codes.Canceled {
+						b.logger.Error("Failed to resubscribe", zap.Error(err))
+					}
 				}
 
-				return
+				break
 			}
 
 			if err := b.SubscriptionsRegistry.NewMessage(env); err != nil {
@@ -147,7 +176,7 @@ func (b *Backend) subscribeFromServer(ctx context.Context, pk *crypto.Key) error
 	return nil
 }
 
-func (b *Backend) unsubscribeFromServer(ctx context.Context, pk *crypto.Key) error {
+func (b *Backend) unsubscribeFromServer(_ context.Context, _ *crypto.Key) error {
 	// TODO: Cancel subscription stream
 
 	return nil

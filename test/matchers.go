@@ -1,13 +1,16 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package test
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/onsi/gomega/types"
-	"github.com/stv0g/cunicu/pkg/core"
 
-	"fmt"
+	"github.com/stv0g/cunicu/pkg/daemon"
 )
 
 func BeRandom() types.GomegaMatcher {
@@ -52,7 +55,7 @@ type eventMatcher[E any] struct {
 }
 
 func (matcher *eventMatcher[E]) Match(actual any) (success bool, err error) {
-	events, ok := actual.(chan core.Event)
+	events, ok := actual.(chan daemon.Event)
 	if !ok {
 		return false, errors.New("actual is not an event channel")
 	}
@@ -70,10 +73,10 @@ func (matcher *eventMatcher[E]) Match(actual any) (success bool, err error) {
 	}
 }
 
-func (matcher *eventMatcher[E]) FailureMessage(actual any) (message string) {
+func (matcher *eventMatcher[E]) FailureMessage(_ any) (message string) {
 	return "Did not receive expected event"
 }
 
-func (matcher *eventMatcher[E]) NegatedFailureMessage(actual any) (message string) {
+func (matcher *eventMatcher[E]) NegatedFailureMessage(_ any) (message string) {
 	return "Received event unexpectedly"
 }

@@ -1,4 +1,7 @@
-FROM golang:1.19-alpine AS builder
+# SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+# SPDX-License-Identifier: Apache-2.0
+
+FROM golang:1.20-alpine AS builder
 
 RUN apk add \
     git \
@@ -16,7 +19,7 @@ RUN go mod download
 COPY . .
 RUN make
 
-FROM alpine:3.16
+FROM alpine:3.18
 
 COPY --from=builder /app/cunicu /
 

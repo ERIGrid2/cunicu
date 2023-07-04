@@ -1,3 +1,8 @@
+---
+# SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+# SPDX-License-Identifier: Apache-2.0
+---
+
 # Proxying
 
 cunīcu implements multiple ways of running an ICE agent alongside WireGuard on the same UDP ports.
@@ -61,7 +66,9 @@ cunīcu implements wireguard-go's `conn.Bind` interface to handle WireGuard's ne
 WireGuard traffic is passed directly between `conn.Bind` and Pion's `ice.Conn`.
 No round-trip through the kernel stack is required.
 
-**Note:** This variant only works for the compiled-in version of wireguard-go in cunīcu.
+:::note
+This variant only works for the compiled-in version of wireguard-go in cunīcu.
+:::
 
 ## Flowchart
 

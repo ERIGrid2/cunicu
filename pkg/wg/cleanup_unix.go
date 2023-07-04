@@ -1,20 +1,25 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 //go:build unix
 
 package wg
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"os"
-	"path"
 	"path/filepath"
 
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
+
+	"github.com/stv0g/cunicu/pkg/log"
 )
 
 func CleanupUserSockets() error {
-	logger := zap.L().Named("wg")
+	logger := log.Global.Named("wg")
 
 	// Ignore non-existing dir
 	if _, err := os.Stat(SocketPath); err != nil && errors.Is(err, os.ErrNotExist) {
@@ -29,9 +34,11 @@ func CleanupUserSockets() error {
 	for _, de := range des {
 		p := filepath.Join(SocketPath, de.Name())
 
-		if path.Ext(p) == ".sock" {
+		if filepath.Ext(p) == ".sock" {
 			if c, err := net.Dial("unix", p); err == nil {
-				c.Close()
+				if err := c.Close(); err != nil {
+					return fmt.Errorf("failed to close socket: %w", err)
+				}
 			} else if !errors.Is(err, unix.ENOENT) {
 				logger.Warn("Delete stale WireGuard user socket", zap.String("path", p))
 

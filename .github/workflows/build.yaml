@@ -1,19 +1,20 @@
+# SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+# SPDX-License-Identifier: Apache-2.0
+
 # yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/master/src/schemas/json/github-workflow.json
 ---
 name: Build
 
-on: 
+on:
   push:
     branches:
     - master
   pull_request:
-    branches:
-    - master
 
 jobs:
   build:
-    name: Build for ${{ matrix.target_os }} on ${{ matrix.target_arch }}${{ matrix.target_arch == 'arm' && format('-v{0}', matrix.arm) || ''}}
-    runs-on: ${{ matrix.runner || 'ubuntu-latest' }}
+    name: Build for ${{ matrix.target_os }} on ${{ matrix.target_arch }}${{ matrix.target_arch == 'arm' && format('-v{0}', matrix.arm) || ''}}${{ matrix.target_arch == 'mips' && format('-{0}', matrix.mips) || ''}}
+    runs-on: ${{ matrix.runner || 'ubuntu-22.04' }}
 
     strategy:
       fail-fast: false
@@ -31,31 +32,33 @@ jobs:
           host_arch: amd64
           runner: ubuntu-latest
 
-        # Temporarily disabled due: https://github.com/golang/go/issues/54638
-        # - target_os: linux
-        #   target_arch: arm
+        - target_os: linux
+          target_arch: arm
+          host_os: linux
+          host_arch: amd64
+          arm: "7"
+          runner: ubuntu-latest
+
+        # TODO: FreeBSD builds require cgo and FreeBSD
+        #       system headers.
+
+        # - target_os: freebsd
+        #   target_arch: amd64
         #   host_os: linux
         #   host_arch: amd64
-        #   arm: 7
         #   runner: ubuntu-latest
 
-        - target_os: freebsd
-          target_arch: amd64
-          host_os: linux
-          host_arch: amd64
-          runner: ubuntu-latest
-
-        - target_os: freebsd
-          target_arch: arm64
-          host_os: linux
-          host_arch: amd64
-          runner: ubuntu-latest
+        # - target_os: freebsd
+        #   target_arch: arm64
+        #   host_os: linux
+        #   host_arch: amd64
+        #   runner: ubuntu-latest
 
         # - target_os: freebsd
         #   target_arch: arm
         #   host_os: linux
         #   host_arch: amd64
-        #   arm: 7
+        #   arm: "7"
         #   runner: ubuntu-latest
 
         - target_os: darwin
@@ -82,19 +85,19 @@ jobs:
           host_arch: amd64
           runner: windows-latest
 
-        # - target_os: linux
-        #   target_arch: mips
-        #   host_os: linux
-        #   host_arch: amd64
-        #   mips: softfloat
-        #   runner: ubuntu-latest
+        - target_os: linux
+          target_arch: mips
+          host_os: linux
+          host_arch: amd64
+          mips: softfloat
+          runner: ubuntu-latest
 
-        # - target_os: linux
-        #   target_arch: mips
-        #   host_os: linux
-        #   host_arch: amd64
-        #   mips: hardfloat
-        #   runner: ubuntu-latest
+        - target_os: linux
+          target_arch: mips
+          host_os: linux
+          host_arch: amd64
+          mips: hardfloat
+          runner: ubuntu-latest
 
     env:
       GOOS: ${{ matrix.target_os }}
@@ -102,7 +105,7 @@ jobs:
       GOARM: ${{ matrix.arm || '' }}
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - name: Install dependencies
       if: ${{ matrix.host_os == 'linux' }}
@@ -126,11 +129,10 @@ jobs:
             make
 
     - name: Setup Go
-      uses: actions/setup-go@v3
+      uses: actions/setup-go@v4
       with:
-        go-version-file: 'go.mod'
+        go-version-file: go.mod
         check-latest: true
-        cache: true
     
     - name: Install build and test dependencies
       env:
@@ -138,22 +140,23 @@ jobs:
         GOARCH: ${{ matrix.host_arch }}
       run: make install-deps
 
-    - name: Run cunicu build
+    - name: Run cunīcu build
       run: make cunicu
       
-    - name: Run vet
-      run: make vet
-
-    - name: Run staticcheck
-      run: make staticcheck
+    - name: Lint
+      if: ${{ matrix.host_os != 'windows' }}
+      run: make lint LINT_OPTS=--timeout=15m
 
     - name: Run tests
       if: ${{ matrix.target_arch == matrix.host_arch && matrix.target_os == matrix.host_os && matrix.host_os != 'windows' }}
       run: sudo --preserve-env env "PATH=$PATH" make tests
+      env:
+        # Pass token via environment variable to avoid GitHub API rate-limit
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Run tests for Windows # which has no sudo
       if: ${{ matrix.target_arch == matrix.host_arch && matrix.target_os == matrix.host_os && matrix.host_os == 'windows' }}
-      run: make tests GINKGO_EXTRA_OPTS="--label-filter=!broken-on-windows"
+      run: make tests GINKGO_OPTS="--label-filter=!broken-on-windows"
 
     - name: Run end-to-end tests
       if: ${{ matrix.target_arch == matrix.host_arch && matrix.target_os == matrix.host_os && matrix.host_os == 'linux' }}
@@ -170,16 +173,6 @@ jobs:
       if: ${{ matrix.target_os == 'linux' && matrix.target_arch == 'amd64' }}
       run: |
         make coverprofile_merged.out
-
-    - name: Report test coverage to Codacy
-      if: ${{ matrix.target_os == 'linux' && matrix.target_arch == 'amd64' }}
-      uses: codacy/codacy-coverage-reporter-action@v1
-      env:
-        CODACY_REPORTER_TMP_FOLDER: .codacy
-      with:
-        project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
-        coverage-reports: coverprofile_merged.out
-        force-coverage-parser: go
 
     - name: Report test coverage to Codecov
       if: ${{ matrix.target_os == 'linux' && matrix.target_arch == 'amd64' }}

@@ -1,6 +1,9 @@
+# SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+# SPDX-License-Identifier: Apache-2.0
+
 # yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/master/src/schemas/json/github-workflow.json
 ---
-name: Build and deploy website to GitHub Pages
+name: Build and deploy website
 
 on:
   push:
@@ -14,22 +17,59 @@ defaults:
 
 jobs:
   deploy:
-    name: Build and deploy website to GitHub Pages
+    name: Build and deploy website
     runs-on: ubuntu-latest
     environment: release
     steps:
     - name: Checkout
       uses: actions/checkout@v3
 
-    - name: Setup Node.js
+    - name: Install dependencies
+      run: sudo apt-get install -y
+            coturn
+            protobuf-compiler
+            make
+            libpcap-dev
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version-file: go.mod
+        check-latest: true
+    
+    - name: Install build and test dependencies
+      run: make install-deps
+      working-directory: ./
+
+    - name: Generate docs
+      run: make docs
+      working-directory: ./
+
+    - name: Set up Node.js
       uses: actions/setup-node@v3
       with:
-        node-version: 18
-        cache: yarn
-        cache-dependency-path: website/yarn.lock
+        node-version: 20
+
+    - name: Get yarn cache directory path
+      id: yarn-cache-dir-path
+      run: echo "dir=$(yarn config get cacheFolder)" >> $GITHUB_OUTPUT
+      shell: bash
+
+    - name: Restore yarn cache
+      uses: actions/cache@v3
+      with:
+        path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+        key: yarn-cache-folder-${{ hashFiles('**/yarn.lock', '.yarnrc.yml') }}
+        restore-keys: |
+          yarn-cache-folder-
+
+    - name: Set up yarn
+      run: |
+        corepack enable
+        corepack prepare yarn@stable --activate
 
     - name: Install dependencies
-      run: yarn install --frozen-lockfile
+      run: yarn install --immutable
 
     - name: Build website
       run: yarn build

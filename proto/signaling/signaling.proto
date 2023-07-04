@@ -1,20 +1,21 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 syntax = "proto3";
 
 package cunicu.signaling;
 option go_package = "github.com/stv0g/cunicu/pkg/proto/signaling";
 
 import "common.proto";
-import "feat/pdisc.proto";
-import "feat/pske.proto";
-import "feat/epdisc.proto";
-import "feat/epdisc_candidate.proto";
+import "feature/pdisc.proto";
+import "feature/pske.proto";
+import "feature/epdisc.proto";
+import "feature/epdisc_candidate.proto";
 
 enum BackendType {
     MULTI = 0;
-    P2P = 1;
-    K8S = 2;
-    GRPC = 3;
-    INPROCESS = 4;
+    GRPC = 1;
+    INPROCESS = 2;
 }
 
 message Envelope {
@@ -43,6 +44,7 @@ message SubscribeParams {
 
 service Signaling {
     rpc GetBuildInfo(Empty) returns (BuildInfo) {}
+
     rpc Subscribe(SubscribeParams) returns (stream Envelope) {}
     rpc Publish(Envelope) returns (Empty) {}
 }

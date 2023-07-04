@@ -1,14 +1,19 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package crypto
 
+// TODO: Remove nolint directive once gci knows the new package
+//nolint:gci
 import (
-	"crypto/sha512"
+	"crypto/ecdh"
 	"encoding/base64"
 	"errors"
+	"math/big"
 	"net"
 
 	"github.com/dchest/siphash"
-	"golang.org/x/crypto/curve25519"
-	"golang.org/x/crypto/pbkdf2"
+	"golang.org/x/crypto/argon2"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
@@ -16,23 +21,26 @@ import (
 
 const (
 	KeyLength = 32
-
-	pbkdf2Iterations = 4096
 )
 
+//nolint:gochecknoglobals
 var (
 	// A cunīcu specific key for siphash to generate unique IPv6 addresses from the
 	// interfaces public key
 	addrHashKey = [...]byte{0x67, 0x67, 0x2c, 0x05, 0xd1, 0x3e, 0x11, 0x94, 0xbb, 0x38, 0x91, 0xff, 0x4f, 0x80, 0xb3, 0x97}
 
-	pbkdf2Salt = [...]byte{0x77, 0x31, 0x63, 0x33, 0x63, 0x30, 0x6e, 0x6e, 0x33, 0x63, 0x74, 0x73, 0x33, 0x76, 0x65, 0x72, 0x79, 0x62, 0x30, 0x64, 0x79}
+	argonSalt = [...]byte{0x77, 0x31, 0x63, 0x33, 0x63, 0x30, 0x6e, 0x6e, 0x33, 0x63, 0x74, 0x73, 0x33, 0x76, 0x65, 0x72, 0x79, 0x62, 0x30, 0x64, 0x79}
+
+	errInvalidKeyLength = errors.New("invalid length")
 )
 
-type Nonce []byte
-type Key [KeyLength]byte
+type (
+	Nonce []byte
+	Key   [KeyLength]byte
+)
 
 func GenerateKeyFromPassword(pw string) Key {
-	key := pbkdf2.Key([]byte(pw), pbkdf2Salt[:], pbkdf2Iterations, KeyLength, sha512.New)
+	key := argon2.IDKey([]byte(pw), argonSalt[:], 1, 64*1024, 4, KeyLength)
 
 	// Modify random bytes using algorithm described at:
 	// https://cr.yp.to/ecdh.html.
@@ -72,7 +80,7 @@ func ParseKey(str string) (Key, error) {
 
 func ParseKeyBytes(buf []byte) (Key, error) {
 	if len(buf) != KeyLength {
-		return Key{}, errors.New("invalid length")
+		return Key{}, errInvalidKeyLength
 	}
 
 	return *(*Key)(buf), nil
@@ -102,11 +110,10 @@ func (k Key) Bytes() []byte {
 	return k[:]
 }
 
-// IPv6Address derives an IPv6 link local address from they key
-func (k Key) IPv6Address() *net.IPNet {
-	ip := net.IP{0xfe, 0x80, 0, 0, 0, 0, 0, 0}
+func (k Key) IPAddress(p net.IPNet) net.IPNet {
+	ones, bits := p.Mask.Size()
 
-	hash := siphash.New(addrHashKey[:])
+	hash := siphash.New128(addrHashKey[:])
 	if n, err := hash.Write(k[:]); err != nil {
 		panic(err)
 	} else if n != KeyLength {
@@ -114,53 +121,40 @@ func (k Key) IPv6Address() *net.IPNet {
 	}
 
 	// Append interface identifier from the hash function
-	ip = hash.Sum(ip)
+	var db []byte
+	db = hash.Sum(db)
 
-	if len(ip) != net.IPv6len {
-		panic("invalid IP length")
+	n := p.Mask
+	b := p.IP
+	if c := p.IP.To4(); c != nil {
+		b = c
 	}
 
-	return &net.IPNet{
-		IP:   ip,
-		Mask: net.CIDRMask(64, 128),
-	}
-}
+	d := new(big.Int).SetBytes(db[:bits/8])
+	m := new(big.Int).SetBytes(n)
+	i := new(big.Int).SetBytes(b)
 
-// IPv4Address derives an IPv4 link local address from they key
-func (k Key) IPv4Address() *net.IPNet {
-	hash := siphash.New(addrHashKey[:])
-	if _, err := hash.Write(k[:]); err != nil {
-		panic(err)
-	}
+	d.Rsh(d, uint(ones))
+	i.And(i, m)
+	d.Or(d, i)
 
-	sum := hash.Sum64()
-	sum2 := uint64(0)
-
-	for i := 0; i < 4; i++ {
-		sum2 ^= sum & 0xffff
-		sum >>= 16
-	}
-
-	c := byte(sum2 >> 8)
-	d := byte(sum2 & 0xff)
-
-	// Exclude reserved addresses
-	// See: https://datatracker.ietf.org/doc/html/rfc3927#section-2.1
-	if c == 0 {
-		c++
-	} else if c == 0xff {
-		c--
-	}
-
-	return &net.IPNet{
-		IP:   net.IPv4(169, 254, c, d),
-		Mask: net.CIDRMask(16, 32),
+	return net.IPNet{
+		IP:   d.Bytes(),
+		Mask: m.Bytes(),
 	}
 }
 
 // Checks if the key is not zero
 func (k Key) IsSet() bool {
 	return k != Key{}
+}
+
+// A key which uses GenerateKeyFromPassword() for UnmarshalText()
+type KeyPassphrase Key
+
+func (k *KeyPassphrase) UnmarshalText(text []byte) error {
+	*k = KeyPassphrase(GenerateKeyFromPassword(string(text)))
+	return nil
 }
 
 type KeyPair struct {
@@ -171,7 +165,10 @@ type KeyPair struct {
 type PublicKeyPair KeyPair
 
 func (kp KeyPair) Shared() Key {
-	shared, err := curve25519.X25519(kp.Ours[:], kp.Theirs[:])
+	sk, _ := ecdh.X25519().NewPrivateKey(kp.Ours[:])
+	pk, _ := ecdh.X25519().NewPublicKey(kp.Theirs[:])
+
+	shared, err := sk.ECDH(pk)
 	if err != nil {
 		panic(err)
 	}

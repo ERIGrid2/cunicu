@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package nodes
 
 import (
@@ -5,6 +8,9 @@ import (
 	"fmt"
 
 	"golang.org/x/sync/errgroup"
+
+	"github.com/stv0g/cunicu/pkg/log"
+	"github.com/stv0g/cunicu/test"
 )
 
 type AgentList []*Agent
@@ -32,7 +38,10 @@ func (al AgentList) ForEachAgent(cb func(a *Agent) error) error {
 		a := a
 
 		g.Go(func() error {
-			return cb(a)
+			if err := cb(a); err != nil {
+				return fmt.Errorf("%w (node %s)", err, a.Name())
+			}
+			return nil
 		})
 	}
 
@@ -49,7 +58,6 @@ func (al AgentList) ForEachInterface(cb func(i *WireGuardInterface) error) error
 			g.Go(func() error {
 				return cb(ni)
 			})
-
 		}
 	}
 
@@ -98,14 +106,59 @@ func (al AgentList) ForEachInterfacePair(cb func(a, b *WireGuardInterface) error
 	return g.Wait()
 }
 
+func (al AgentList) ForEachInterfacePairOneDir(cb func(a, b *WireGuardInterface) error) error {
+	g := errgroup.Group{}
+
+	for i, n := range al {
+		for _, p := range al[i+1:] {
+			for _, ni := range n.WireGuardInterfaces {
+				for _, pi := range p.WireGuardInterfaces {
+					pi := pi // avoid aliasing
+					ni := ni
+
+					g.Go(func() error {
+						return cb(ni, pi)
+					})
+				}
+			}
+		}
+	}
+
+	return g.Wait()
+}
+
 func (al AgentList) WaitConnectionsReady(ctx context.Context) error {
-	return al.ForEachInterfacePair(func(a, b *WireGuardInterface) error {
-		return a.WaitConnectionReady(ctx, b)
-	})
+	handler := &test.DefaultProgressHandler{
+		Logger: log.Global.Named("wait-conns"),
+	}
+
+	return test.WithProgress(ctx, func(started, completed chan string) error {
+		return al.ForEachInterfacePair(func(a, b *WireGuardInterface) error {
+			id := fmt.Sprintf("%s <-> %s", a, b)
+
+			started <- id
+			err := a.WaitConnectionEstablished(ctx, b)
+			completed <- id
+
+			return err
+		})
+	}, handler)
 }
 
 func (al AgentList) PingPeers(ctx context.Context) error {
-	return al.ForEachInterfacePair(func(a, b *WireGuardInterface) error {
-		return a.PingPeer(ctx, b)
-	})
+	handler := &test.DefaultProgressHandler{
+		Logger: log.Global.Named("ping"),
+	}
+
+	return test.WithProgress(ctx, func(started, completed chan string) error {
+		return al.ForEachInterfacePairOneDir(func(a, b *WireGuardInterface) error {
+			id := fmt.Sprintf("%s <-> %s", a, b)
+
+			started <- id
+			err := a.PingPeer(ctx, b)
+			completed <- id
+
+			return err
+		})
+	}, handler)
 }

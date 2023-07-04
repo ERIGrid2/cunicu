@@ -1,21 +1,21 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package inprocess
 
 import (
 	"context"
 
-	"go.uber.org/zap"
-
 	"github.com/stv0g/cunicu/pkg/crypto"
-	"github.com/stv0g/cunicu/pkg/signaling"
-
+	"github.com/stv0g/cunicu/pkg/log"
 	signalingproto "github.com/stv0g/cunicu/pkg/proto/signaling"
+	"github.com/stv0g/cunicu/pkg/signaling"
 )
 
-var (
-	subs = signaling.NewSubscriptionsRegistry()
-)
+//nolint:gochecknoglobals
+var subs = signaling.NewSubscriptionsRegistry()
 
-func init() {
+func init() { //nolint:gochecknoinits
 	signaling.Backends["inprocess"] = &signaling.BackendPlugin{
 		New:         NewBackend,
 		Description: "In-Process",
@@ -23,10 +23,10 @@ func init() {
 }
 
 type Backend struct {
-	logger *zap.Logger
+	logger *log.Logger
 }
 
-func NewBackend(cfg *signaling.BackendConfig, logger *zap.Logger) (signaling.Backend, error) {
+func NewBackend(cfg *signaling.BackendConfig, logger *log.Logger) (signaling.Backend, error) {
 	b := &Backend{
 		logger: logger,
 	}
@@ -42,15 +42,15 @@ func (b *Backend) Type() signalingproto.BackendType {
 	return signalingproto.BackendType_INPROCESS
 }
 
-func (b *Backend) Subscribe(ctx context.Context, kp *crypto.KeyPair, h signaling.MessageHandler) (bool, error) {
+func (b *Backend) Subscribe(_ context.Context, kp *crypto.KeyPair, h signaling.MessageHandler) (bool, error) {
 	return subs.Subscribe(kp, h)
 }
 
-func (b *Backend) Unsubscribe(ctx context.Context, kp *crypto.KeyPair, h signaling.MessageHandler) (bool, error) {
+func (b *Backend) Unsubscribe(_ context.Context, kp *crypto.KeyPair, h signaling.MessageHandler) (bool, error) {
 	return subs.Unsubscribe(kp, h)
 }
 
-func (b *Backend) Publish(ctx context.Context, kp *crypto.KeyPair, msg *signaling.Message) error {
+func (b *Backend) Publish(_ context.Context, kp *crypto.KeyPair, msg *signaling.Message) error {
 	env, err := msg.Encrypt(kp)
 	if err != nil {
 		return err

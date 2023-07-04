@@ -1,9 +1,10 @@
+# SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+# SPDX-License-Identifier: Apache-2.0
+
 ---
 ignore:
 # Auto-generated files
 - pkg/proto/**/*.pb.go
-- pkg/signaling/k8s/apis/**/*
-- pkg/signaling/k8s/client/**/*
 
 codecov:
   strict_yaml_branch: master

@@ -1,23 +1,21 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package log_test
 
 import (
-	"fmt"
 	"io"
+	stdlog "log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"testing"
 
-	stdlog "log"
+	"google.golang.org/grpc/grpclog"
+
+	"github.com/stv0g/cunicu/pkg/log"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/stv0g/cunicu/pkg/log"
-	t "github.com/stv0g/cunicu/pkg/util/terminal"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	"google.golang.org/grpc/grpclog"
-	"k8s.io/klog/v2"
 )
 
 func TestSuite(t *testing.T) {
@@ -25,60 +23,56 @@ func TestSuite(t *testing.T) {
 	RunSpecs(t, "Logging Suite")
 }
 
-// TODO: This test is currently broken on Windows dues:
+// TODO: This test is currently broken on Windows due:
 // https://github.com/uber-go/zap/issues/621
 var _ = Context("log", Label("broken-on-windows"), func() {
-	var logger *zap.Logger
-	var lvl zapcore.Level
-	var logPath, msg, scope string
+	var logger *log.Logger
+	var lvl log.Level
+	var logPath, msg, name string
 
 	BeforeEach(func() {
 		tmpDir := GinkgoT().TempDir()
 
 		logPath = filepath.Join(tmpDir, "std.log")
-		msg = fmt.Sprintf("Test message %s", t.Color("something red", t.FgRed))
+		msg = "Test message"
+		lvl = log.InfoLevel
 
-		os.Setenv("GRPC_GO_LOG_VERBOSITY_LEVEL", "2")
-		os.Setenv("GRPC_GO_LOG_SEVERITY_LEVEL", lvl.String())
-		os.Setenv("PION_LOG", lvl.String())
+		log.ResetWidths()
 	})
 
 	JustBeforeEach(func() {
-		logger = log.SetupLogging(lvl, 0, []string{logPath}, nil, true)
+		var err error
+		logger, err = log.SetupLogging("", []string{logPath}, false)
+		Expect(err).To(Succeed())
 	})
 
 	Context("simple", func() {
 		It("can log via created logger", func() {
-			scope = ""
+			name = ""
 			logger.Info(msg)
 		})
 
 		It("can log via std logger", func() {
-			scope = ""
+			name = ""
 			stdlog.Print(msg)
 		})
 
 		It("can log via global logger", func() {
-			scope = ""
-			zap.L().Info(msg)
+			name = ""
+			log.Global.Info(msg)
 		})
 
 		It("can log via pion logger", func() {
-			loggerFactory := log.NewPionLoggerFactory(logger)
-			logger := loggerFactory.NewLogger("myscope")
+			logger := log.NewPionLogger(logger, "ice.myscope")
 
-			scope = "ice.myscope"
+			name = "ice.myscope"
 			logger.Info(msg)
 		})
 
 		It("can log via gRPC logger", func() {
-			scope = "grpc"
+			name = "grpc"
+			lvl = log.TraceLevel
 			grpclog.Info(msg)
-		})
-
-		It("can log via k8s logger", func() {
-			scope = "backend.k8s"
-			klog.Info(msg)
 		})
 	})
 
@@ -95,14 +89,17 @@ var _ = Context("log", Label("broken-on-windows"), func() {
 		Expect(err).To(Succeed(), "Failed to read standard log contents: %s", err)
 		Expect(logContents).NotTo(BeEmpty())
 
-		if scope != "" {
-			scope += `\t`
+		regexTime := `\d{2}:\d{2}:\d{2}.\d{6} `
+		regexLevel := lvl.String() + " "
+		regexName := name + " "
+
+		var regex string
+		if name != "" {
+			regex = regexTime + regexLevel + regexName + msg
+		} else {
+			regex = regexTime + regexLevel + msg
 		}
 
-		regex := fmt.Sprintf(`\d{2}:\d{2}:\d{2}.\d{3}\t%s\t%s%s`,
-			regexp.QuoteMeta(t.Color(lvl.String(), t.FgBlue)), scope,
-			regexp.QuoteMeta(msg))
-
-		Expect(logContents).To(MatchRegexp(regex), "Log output '%s' does not match regex '%s'", logContents, regex)
+		Expect(string(logContents)).To(MatchRegexp(regex), "Log output '%s' does not match regex '%s'", logContents, regex)
 	})
 })

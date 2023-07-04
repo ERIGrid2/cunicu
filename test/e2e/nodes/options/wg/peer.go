@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package wg
 
 import (
@@ -5,9 +8,10 @@ import (
 	"net"
 	"time"
 
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
+
 	"github.com/stv0g/cunicu/pkg/crypto"
 	"github.com/stv0g/cunicu/test/e2e/nodes"
-	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 // PublicKey specifies the public key of this peer.  PublicKey is a
@@ -84,10 +88,7 @@ func Peer(pk crypto.Key, opts ...nodes.WireGuardPeerOption) *nodes.WireGuardPeer
 	}
 
 	for _, o := range opts {
-		switch opt := o.(type) {
-		case nodes.WireGuardPeerOption:
-			opt.Apply(p)
-		}
+		o.Apply(p)
 	}
 
 	return p

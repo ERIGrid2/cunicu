@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package grpc_test
 
 import (
@@ -5,18 +8,18 @@ import (
 	"net/url"
 	"testing"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
 	"github.com/stv0g/cunicu/pkg/signaling/grpc"
 	"github.com/stv0g/cunicu/test"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
 func TestSuite(t *testing.T) {
+	test.SetupLogging()
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "gRPC Backend Suite")
 }
-
-var _ = test.SetupLogging()
 
 var _ = Describe("gRPC backend", func() {
 	var svr *grpc.Server
@@ -31,8 +34,8 @@ var _ = Describe("gRPC backend", func() {
 		Expect(err).To(Succeed(), "Failed to listen: %s", err)
 
 		// Start local dummy gRPC server
-		svr = grpc.NewServer()
-		go svr.Serve(l)
+		svr = grpc.NewSignalingServer()
+		go svr.Serve(l) //nolint:errcheck
 
 		u = url.URL{
 			Scheme:   "grpc",

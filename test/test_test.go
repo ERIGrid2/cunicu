@@ -1,20 +1,23 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package test_test
 
 import (
 	"crypto/rand"
 	"testing"
 
+	"github.com/stv0g/cunicu/test"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/stv0g/cunicu/test"
 )
 
 func TestSuite(t *testing.T) {
+	test.SetupLogging()
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Test Helper Suite")
 }
-
-var _ = test.SetupLogging()
 
 var _ = Describe("entropy", func() {
 	Specify("that the entropy of an empty slice is zero", func() {

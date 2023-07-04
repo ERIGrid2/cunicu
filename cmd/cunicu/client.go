@@ -1,16 +1,20 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+
 	"github.com/stv0g/cunicu/pkg/config"
 	"github.com/stv0g/cunicu/pkg/rpc"
 )
 
 var (
-	rpcClient   *rpc.Client
-	rpcSockPath string
+	rpcClient   *rpc.Client //nolint:gochecknoglobals
+	rpcSockPath string      //nolint:gochecknoglobals
 )
 
 func addClientCommand(rcmd, cmd *cobra.Command) {
@@ -23,7 +27,7 @@ func addClientCommand(rcmd, cmd *cobra.Command) {
 	rcmd.AddCommand(cmd)
 }
 
-func rpcConnect(cmd *cobra.Command, args []string) error {
+func rpcConnect(_ *cobra.Command, _ []string) error {
 	var err error
 
 	if rpcClient, err = rpc.Connect(rpcSockPath); err != nil {
@@ -33,6 +37,6 @@ func rpcConnect(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func rpcDisconnect(cmd *cobra.Command, args []string) error {
+func rpcDisconnect(_ *cobra.Command, _ []string) error {
 	return rpcClient.Close()
 }

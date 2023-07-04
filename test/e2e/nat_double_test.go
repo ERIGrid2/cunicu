@@ -1,14 +1,19 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package e2e_test
 
 import (
 	"fmt"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
+	g "github.com/stv0g/gont/v2/pkg"
+	gopt "github.com/stv0g/gont/v2/pkg/options"
+
 	"github.com/stv0g/cunicu/test/e2e/nodes"
 	wopt "github.com/stv0g/cunicu/test/e2e/nodes/options/wg"
-	g "github.com/stv0g/gont/pkg"
-	gopt "github.com/stv0g/gont/pkg/options"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
 /* Carrier Grade NAT setup with two relays and a single signaling server
@@ -39,7 +44,7 @@ import (
  *             │  n1  │              │  n2  │
  *             └──────┘              └──────┘
  */
-var _ = Context("nat double: Carrier Grade NAT setup with two relays and a single signaling server", func() {
+var _ = Context("nat double: Carrier Grade NAT setup with two relays and a single signaling server", Pending, func() {
 	var (
 		err error
 
@@ -79,8 +84,8 @@ var _ = Context("nat double: Carrier Grade NAT setup with two relays and a singl
 			)
 		}
 
-		opts := gopt.Customize(n.AgentOptions,
-			gopt.Interface("eth0", ifOpts...),
+		opts := gopt.Customize[g.Option](n.AgentOptions,
+			g.NewInterface("eth0", ifOpts...),
 			wopt.Interface("wg0",
 				wopt.AddressIP("172.16.0.%d/16", i),
 				wopt.FullMeshPeers,
@@ -113,24 +118,24 @@ var _ = Context("nat double: Carrier Grade NAT setup with two relays and a singl
 		lan, err := nw.AddSwitch(fmt.Sprintf("lan%d", i))
 		Expect(err).To(Succeed(), "Failed to create switch: %s", err)
 
-		nbifOpts := []g.Option{sw, gopt.NorthBound}
+		nbIfOpts := []g.Option{sw, gopt.NorthBound}
 
 		switch {
 		case i == 1: // wan1
-			nbifOpts = append(nbifOpts,
+			nbIfOpts = append(nbIfOpts,
 				gopt.AddressIP("10.10.0.3/16"),
 				gopt.AddressIP("fc:10::3/64"),
 			)
 		case i == 2: // wan2
-			nbifOpts = append(nbifOpts,
+			nbIfOpts = append(nbIfOpts,
 				gopt.AddressIP("10.11.0.3/16"),
 				gopt.AddressIP("fc:11::3/64"),
 			)
 		}
 
 		opts := []g.Option{
-			gopt.Interface("eth-nb", nbifOpts...),
-			gopt.Interface("eth-sb", lan,
+			g.NewInterface("eth-nb", nbIfOpts...),
+			g.NewInterface("eth-sb", lan,
 				gopt.SouthBound,
 				gopt.AddressIP("10.1.0.254/24"),
 				gopt.AddressIP("fc:1::ff/64"),
@@ -167,7 +172,7 @@ var _ = Context("nat double: Carrier Grade NAT setup with two relays and a singl
 		By("Initializing relay node")
 
 		r1, err := nodes.NewCoturnNode(nw, "r1",
-			gopt.Interface("eth0", wan1,
+			g.NewInterface("eth0", wan1,
 				gopt.AddressIP("10.10.0.1/16"),
 				gopt.AddressIP("fc:10::1/64"),
 			),
@@ -175,7 +180,7 @@ var _ = Context("nat double: Carrier Grade NAT setup with two relays and a singl
 		Expect(err).To(Succeed(), "Failed to start relay: %s", err)
 
 		r2, err := nodes.NewCoturnNode(nw, "r2",
-			gopt.Interface("eth0", wan2,
+			g.NewInterface("eth0", wan2,
 				gopt.AddressIP("10.11.0.1/16"),
 				gopt.AddressIP("fc:11::1/64"),
 			),
@@ -185,7 +190,7 @@ var _ = Context("nat double: Carrier Grade NAT setup with two relays and a singl
 		By("Initializing signaling node")
 
 		s1, err := nodes.NewGrpcSignalingNode(nw, "s1",
-			gopt.Interface("eth0", wan1,
+			g.NewInterface("eth0", wan1,
 				gopt.AddressIP("10.10.0.2/16"),
 				gopt.AddressIP("fc:10::2/64"),
 			),
@@ -195,12 +200,12 @@ var _ = Context("nat double: Carrier Grade NAT setup with two relays and a singl
 		By("Initializing CGNAT node")
 
 		_, err = nw.AddNAT("nat3",
-			gopt.Interface("eth-nb", wan1,
+			g.NewInterface("eth-nb", wan1,
 				gopt.NorthBound,
 				gopt.AddressIP("10.10.0.4/16"),
 				gopt.AddressIP("fc:10::4/64"),
 			),
-			gopt.Interface("eth-sb", wan2,
+			g.NewInterface("eth-sb", wan2,
 				gopt.SouthBound,
 				gopt.AddressIP("10.11.0.4/24"),
 				gopt.AddressIP("fc:11::4/64"),

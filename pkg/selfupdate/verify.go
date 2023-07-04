@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package selfupdate
 
 // derived from http://github.com/restic/restic
@@ -5,12 +8,12 @@ package selfupdate
 import (
 	"bytes"
 	"embed"
+	"errors"
 	"fmt"
 	"os/exec"
-	"path"
+	"path/filepath"
 
-	//lint:ignore SA1019 We still need to find an alternative
-	pgp "golang.org/x/crypto/openpgp"
+	pgp "golang.org/x/crypto/openpgp" //nolint:staticcheck
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/stv0g/cunicu/pkg/proto"
@@ -18,6 +21,8 @@ import (
 
 //go:embed keys/*.gpg
 var keys embed.FS
+
+var errVersionMismatch = errors.New("version mismatch")
 
 func loadKeyRing() (pgp.EntityList, error) {
 	el := pgp.EntityList{}
@@ -28,7 +33,7 @@ func loadKeyRing() (pgp.EntityList, error) {
 	}
 
 	for _, de := range des {
-		fn := path.Join("keys", de.Name())
+		fn := filepath.Join("keys", de.Name())
 		f, err := keys.Open(fn)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open file: %w", err)
@@ -82,7 +87,7 @@ func VersionVerify(binaryFile, expectedVersion string) error {
 	}
 
 	if "v"+expectedVersion != bi.Client.Version {
-		return fmt.Errorf("version mismatch: dowloaded %s != expected v%s", bi.Client.Version, expectedVersion)
+		return fmt.Errorf("%w: dowloaded %s != expected v%s", errVersionMismatch, bi.Client.Version, expectedVersion)
 	}
 
 	return nil

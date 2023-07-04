@@ -1,128 +1,201 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package config
 
 import (
-	"io"
+	"errors"
+	"fmt"
+	"net"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"github.com/pion/ice/v2"
 
-	icex "github.com/stv0g/cunicu/pkg/feat/epdisc/ice"
+	"github.com/stv0g/cunicu/pkg/crypto"
+	icex "github.com/stv0g/cunicu/pkg/ice"
 )
 
-type PortSettings struct {
-	Min int `yaml:"min,omitempty"`
-	Max int `yaml:"max,omitempty"`
+var errInvalidSettings = errors.New("invalid settings")
+
+//nolint:revive
+type ConfigSettings struct {
+	Watch bool `koanf:"watch,omitempty"`
+}
+
+type PortRangeSettings struct {
+	Min int `koanf:"min,omitempty"`
+	Max int `koanf:"max,omitempty"`
 }
 
 type ICESettings struct {
-	URLs           []icex.URL           `yaml:"urls,omitempty"`
-	CandidateTypes []icex.CandidateType `yaml:"candidate_types,omitempty"`
-	NetworkTypes   []icex.NetworkType   `yaml:"network_types,omitempty"`
-	NAT1to1IPs     []string             `yaml:"nat_1to1_ips,omitempty"`
+	URLs           []URL                `koanf:"urls,omitempty"`
+	CandidateTypes []icex.CandidateType `koanf:"candidate_types,omitempty"`
+	NetworkTypes   []icex.NetworkType   `koanf:"network_types,omitempty"`
+	NAT1to1IPs     []string             `koanf:"nat_1to1_ips,omitempty"`
 
-	Port PortSettings `yaml:"port,omitempty"`
+	RelayTCP *bool `koanf:"relay_tcp,omitempty"`
+	RelayTLS *bool `koanf:"relay_tls,omitempty"`
 
-	Lite               bool `yaml:"lite,omitempty"`
-	MDNS               bool `yaml:"mdns,omitempty"`
-	MaxBindingRequests int  `yaml:"max_binding_requests,omitempty"`
-	InsecureSkipVerify bool `yaml:"insecure_skip_verify,omitempty"`
+	PortRange PortRangeSettings `koanf:"port_range,omitempty"`
 
-	InterfaceFilter Regexp `yaml:"interface_filter,omitempty"`
+	Lite               bool `koanf:"lite,omitempty"`
+	MDNS               bool `koanf:"mdns,omitempty"`
+	MaxBindingRequests int  `koanf:"max_binding_requests,omitempty"`
+	InsecureSkipVerify bool `koanf:"insecure_skip_verify,omitempty"`
 
-	DisconnectedTimeout time.Duration `yaml:"disconnected_timeout,omitempty"`
-	FailedTimeout       time.Duration `yaml:"failed_timeout,omitempty"`
+	InterfaceFilter string `koanf:"interface_filter,omitempty"`
+
+	DisconnectedTimeout time.Duration `koanf:"disconnected_timeout,omitempty"`
+	FailedTimeout       time.Duration `koanf:"failed_timeout,omitempty"`
 
 	// KeepaliveInterval used to keep candidates alive
-	KeepaliveInterval time.Duration `yaml:"keepalive_interval,omitempty"`
+	KeepaliveInterval time.Duration `koanf:"keepalive_interval,omitempty"`
 
 	// CheckInterval is the interval at which the agent performs candidate checks in the connecting phase
-	CheckInterval  time.Duration `yaml:"check_interval,omitempty"`
-	RestartTimeout time.Duration `yaml:"restart_timeout,omitempty"`
+	CheckInterval  time.Duration `koanf:"check_interval,omitempty"`
+	RestartTimeout time.Duration `koanf:"restart_timeout,omitempty"`
 
-	Username string `yaml:"username,omitempty"`
-	Password string `yaml:"password,omitempty"`
+	Username string `koanf:"username,omitempty"`
+	Password string `koanf:"password,omitempty"`
+}
+
+func (s *ICESettings) HasCandidateType(ct ice.CandidateType) bool {
+	for _, c := range s.CandidateTypes {
+		if ct == c.CandidateType {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (s *ICESettings) HasNetworkType(nt ice.NetworkType) bool {
+	for _, n := range s.NetworkTypes {
+		if nt == n.NetworkType {
+			return true
+		}
+	}
+
+	return false
 }
 
 type RPCSettings struct {
-	Socket string `yaml:"socket,omitempty"`
-	Wait   bool   `yaml:"wait,omitempty"`
-}
-
-type ConfigSyncSettings struct {
-	Enabled bool   `yaml:"enabled,omitempty"`
-	Path    string `yaml:"path,omitempty"`
-	Watch   bool   `yaml:"watch,omitempty"`
-}
-
-type RouteSyncSettings struct {
-	Enabled bool `yaml:"enabled,omitempty"`
-	Table   int  `yaml:"table,omitempty"`
-	Watch   bool `yaml:"watch,omitempty"`
-}
-
-type WireGuardSettings struct {
-	Userspace       bool     `yaml:"userspace,omitempty"`
-	InterfaceFilter Regexp   `yaml:"interface_filter,omitempty"`
-	Interfaces      []string `yaml:"interfaces,omitempty"`
-
-	Port PortSettings `yaml:"port,omitempty"`
-}
-
-type AutoConfigSettings struct {
-	Enabled bool `yaml:"enabled,omitempty"`
-}
-
-type HostSyncSettings struct {
-	Enabled bool `yaml:"enabled,omitempty"`
-}
-
-type PeerDiscoverySettings struct {
-	Enabled bool `yaml:"enabled,omitempty"`
-
-	Community string `yaml:"community,omitempty"`
-	Whitelist []Key  `yaml:"whitelist,omitempty"`
-}
-
-type EndpointDiscoverySettings struct {
-	Enabled bool `yaml:"enabled,omitempty"`
-
-	ICE ICESettings `yaml:"ice,omitempty"`
+	Socket string `koanf:"socket,omitempty"`
+	Wait   bool   `koanf:"wait,omitempty"`
 }
 
 type HookSetting any
 
+type PeerSettings struct {
+	PublicKey                   crypto.Key           `koanf:"public_key,omitempty"`
+	PresharedKey                crypto.Key           `koanf:"preshared_key,omitempty"`
+	PresharedKeyPassphrase      crypto.KeyPassphrase `koanf:"preshared_key_passphrase,omitempty"`
+	Endpoint                    string               `koanf:"endpoint,omitempty"`
+	PersistentKeepaliveInterval time.Duration        `koanf:"persistent_keepalive,omitempty"`
+	AllowedIPs                  []net.IPNet          `koanf:"allowed_ips,omitempty"`
+}
+
+type BaseHookSetting struct {
+	Type string `koanf:"type"`
+}
+
 type WebHookSetting struct {
-	URL     URL               `yaml:"url"`
-	Method  string            `yaml:"method"`
-	Headers map[string]string `yaml:"headers"`
+	BaseHookSetting `koanf:",squash"`
+	URL             URL               `koanf:"url"`
+	Method          string            `koanf:"method"`
+	Headers         map[string]string `koanf:"headers"`
 }
 
 type ExecHookSetting struct {
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args"`
-	Env     map[string]string `yaml:"env"`
-	Stdin   bool              `yaml:"stdin"`
+	BaseHookSetting `koanf:",squash"`
+	Command         string            `koanf:"command"`
+	Args            []string          `koanf:"args"`
+	Env             map[string]string `koanf:"env"`
+	Stdin           bool              `koanf:"stdin"`
+}
+
+type InterfaceSettings struct {
+	HostName string `koanf:"hostname,omitempty"`
+	Domain   string `koanf:"domain,omitempty"`
+
+	ExtraHosts map[string][]net.IPAddr `koanf:"extra_hosts,omitempty"`
+
+	MTU       int          `koanf:"mtu,omitempty"`
+	DNS       []net.IPAddr `koanf:"dns,omitempty"`
+	Addresses []net.IPNet  `koanf:"addresses,omitempty"`
+	Prefixes  []net.IPNet  `koanf:"prefixes"`
+	Networks  []net.IPNet  `koanf:"networks,omitempty"`
+
+	// Peer discovery
+	Community crypto.KeyPassphrase `koanf:"community,omitempty"`
+	Whitelist []crypto.Key         `koanf:"whitelist,omitempty"`
+	Blacklist []crypto.Key         `koanf:"blacklist,omitempty"`
+
+	// Endpoint discovery
+	ICE            ICESettings `koanf:"ice,omitempty"`
+	PortForwarding bool        `koanf:"port_forwarding,omitempty"`
+
+	// Route sync
+	RoutingTable int `koanf:"routing_table,omitempty"`
+
+	// Hooks
+	Hooks []HookSetting `koanf:"hooks,omitempty"`
+
+	// WireGuard
+	UserSpace       bool                    `koanf:"userspace,omitempty"`
+	PrivateKey      crypto.Key              `koanf:"private_key,omitempty"`
+	ListenPort      *int                    `koanf:"listen_port,omitempty"`
+	ListenPortRange *PortRangeSettings      `koanf:"listen_port_range,omitempty"`
+	FirewallMark    int                     `koanf:"fwmark,omitempty"`
+	Peers           map[string]PeerSettings `koanf:"peers,omitempty"`
+
+	// Feature flags
+	DiscoverEndpoints bool `koanf:"discover_endpoints,omitempty"`
+	DiscoverPeers     bool `koanf:"discover_peers,omitempty"`
+	SyncConfig        bool `koanf:"sync_config,omitempty"`
+	SyncRoutes        bool `koanf:"sync_routes,omitempty"`
+	SyncHosts         bool `koanf:"sync_hosts,omitempty"`
+
+	WatchConfig bool `koanf:"watch_config,omitempty"`
+	WatchRoutes bool `koanf:"watch_routes,omitempty"`
 }
 
 type Settings struct {
-	WatchInterval time.Duration `yaml:"watch_interval,omitempty"`
+	Experimental bool `koanf:"experimental,omitempty"`
 
-	Backends []BackendURL `yaml:"backends,omitempty"`
+	WatchInterval time.Duration `koanf:"watch_interval,omitempty"`
+	Backends      []BackendURL  `koanf:"backends,omitempty"`
 
-	RPC          RPCSettings               `yaml:"rpc,omitempty"`
-	WireGuard    WireGuardSettings         `yaml:"wireguard,omitempty"`
-	AutoConfig   AutoConfigSettings        `yaml:"auto_config,omitempty"`
-	ConfigSync   ConfigSyncSettings        `yaml:"config_sync,omitempty"`
-	RouteSync    RouteSyncSettings         `yaml:"route_sync,omitempty"`
-	HostSync     HostSyncSettings          `yaml:"host_sync,omitempty"`
-	Hooks        []HookSetting             `yaml:"hooks,omitempty"`
-	EndpointDisc EndpointDiscoverySettings `yaml:"endpoint_disc,omitempty"`
-	PeerDisc     PeerDiscoverySettings     `yaml:"peer_disc,omitempty"`
+	RPC    RPCSettings    `koanf:"rpc,omitempty"`
+	Config ConfigSettings `koanf:"config,omitempty"`
+
+	DefaultInterfaceSettings InterfaceSettings            `koanf:",squash"`
+	Interfaces               map[string]InterfaceSettings `koanf:"interfaces"`
 }
 
-func (s *Settings) Dump(wr io.Writer) error {
-	enc := yaml.NewEncoder(wr)
-	enc.SetIndent(2)
+// Check performs plausibility checks on the provided configuration.
+func (c *Settings) Check() error {
+	if err := c.DefaultInterfaceSettings.Check(); err != nil {
+		return err
+	}
 
-	return enc.Encode(s)
+	for _, icfg := range c.Interfaces {
+		if err := icfg.Check(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *InterfaceSettings) Check() error {
+	if c.ListenPortRange != nil && c.ListenPortRange.Min > c.ListenPortRange.Max {
+		return fmt.Errorf("%w: WireGuard minimal listen port (%d) must be smaller or equal than maximal port (%d)",
+			errInvalidSettings,
+			c.ListenPortRange.Min,
+			c.ListenPortRange.Max,
+		)
+	}
+
+	return nil
 }

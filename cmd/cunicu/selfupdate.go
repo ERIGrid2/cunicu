@@ -1,98 +1,69 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 // derived from http://github.com/restic/restic
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/stv0g/cunicu/pkg/selfupdate"
-	"github.com/stv0g/cunicu/pkg/util/buildinfo"
 	"go.uber.org/zap"
+
+	"github.com/stv0g/cunicu/pkg/selfupdate"
 )
 
-var (
+type selfUpdateOptions struct {
 	output string
+}
 
-	selfUpdateCmd = &cobra.Command{
+func init() { //nolint:gochecknoinits
+	opts := &selfUpdateOptions{}
+	cmd := &cobra.Command{
 		Use:   "selfupdate",
 		Short: "Update the cunīcu binary",
-		Long: `Downloads the latest stable release of cunīcu from GitHub and replaces the currently running binary.
+		Long: `Update the cunīcu binary.
+
+This sub-command downloads the latest stable release of cunīcu from GitHub and replaces the currently running binary.
 After download, the authenticity of the binary is verified using the GPG signature on the release files.`,
-		Run: selfUpdate,
+		Run: func(cmd *cobra.Command, args []string) {
+			selfUpdate(cmd, args, opts)
+		},
 	}
-)
 
-func init() {
-	rootCmd.AddCommand(selfUpdateCmd)
+	rootCmd.AddCommand(cmd)
 
-	file, err := os.Executable()
+	selfPath, err := os.Executable()
 	if err != nil {
 		panic(err)
 	}
 
-	if strings.Contains(file, "go-build") {
-		file = "cunicu"
+	self := filepath.Base(selfPath)
+	if strings.Contains(selfPath, "go-build") {
+		self = "cunicu"
 	}
 
-	flags := selfUpdateCmd.Flags()
-	flags.StringVarP(&output, "output", "o", file, "Save the downloaded file as `filename`")
+	flags := cmd.Flags()
+	flags.StringVarP(&opts.output, "output", "o", self, "Save the downloaded file as `filename`")
+
+	if err := cmd.MarkFlagFilename("output"); err != nil {
+		panic(err)
+	}
 }
 
-func selfUpdate(cmd *cobra.Command, args []string) {
+func selfUpdate(_ *cobra.Command, _ []string, opts *selfUpdateOptions) {
 	logger := logger.Named("self-update")
 
-	fi, err := os.Lstat(output)
+	rel, err := selfupdate.SelfUpdate(opts.output, logger)
 	if err != nil {
-		dirname := filepath.Dir(output)
-		di, err := os.Lstat(dirname)
-		if err != nil {
-			logger.Fatal("Failed to stat", zap.Error(err))
-		}
-		if !di.Mode().IsDir() {
-			logger.Fatal("Output parent path is not a directory, use --output to specify a different file path", zap.String("path", dirname))
-		}
-	} else {
-		if !fi.Mode().IsRegular() {
-			logger.Fatal("Output path is not a normal file, use --output to specify a different file path", zap.String("path", output))
-		}
-	}
-
-	curVersion := strings.TrimPrefix(buildinfo.Version, "v")
-
-	logger.Info("Current version", zap.String("version", curVersion))
-
-	rel, err := selfupdate.GitHubLatestRelease(context.Background())
-	if err != nil {
-		logger.Fatal("Failed to get latest release from GitHub", zap.Error(err))
-	}
-
-	logger.Info("Latest version", zap.String("version", rel.Version))
-
-	// We do a lexicographic comparison here to compare the semver versions.
-	if rel.Version == curVersion {
-		logger.Info("Your cunicu version is up to date. Nothing to update.")
-		return
-	} else if rel.Version < curVersion {
-		logger.Warn("You are running an unreleased version of cunicu. Nothing to update.")
-		return
-	} else {
-		logger.Info("Your cunicu version is outdated. Updating now!")
-	}
-
-	if err := selfupdate.DownloadAndVerifyRelease(context.Background(), rel, output, logger); err != nil {
-		logger.Fatal("Failed to update cunicu", zap.Error(err))
-	}
-
-	if err := selfupdate.VersionVerify(output, rel.Version); err != nil {
-		logger.Fatal("Failed to update cunicu", zap.Error(err))
+		logger.Fatal("Self-update failed", zap.Error(err))
 	}
 
 	logger.Info("Successfully updated cunicu",
 		zap.String("version", rel.Version),
-		zap.String("filename", output),
+		zap.String("filename", opts.output),
 	)
 }

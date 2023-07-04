@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 // Package test implements universal helpers for unit and integration tests
 package test
 
@@ -6,11 +9,14 @@ import (
 	"crypto/rand"
 	"math"
 	"math/big"
+	"os"
+	"sync"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/stv0g/cunicu/pkg/crypto"
+	epdiscproto "github.com/stv0g/cunicu/pkg/proto/feature/epdisc"
 	"github.com/stv0g/cunicu/pkg/signaling"
-
-	protoepdisc "github.com/stv0g/cunicu/pkg/proto/feat/epdisc"
 )
 
 func GenerateKeyPairs() (*crypto.KeyPair, *crypto.KeyPair, error) {
@@ -40,7 +46,7 @@ func GenerateSignalingMessage() *signaling.Message {
 	}
 
 	return &signaling.Message{
-		Candidate: &protoepdisc.Candidate{
+		Candidate: &epdiscproto.Candidate{
 			Port: int32(r.Int64()),
 		},
 	}
@@ -51,8 +57,8 @@ func Entropy(data []byte) float64 {
 		return 0
 	}
 
-	var length = float64(len(data))
-	var entropy = 0.0
+	length := float64(len(data))
+	entropy := 0.0
 
 	for i := 0; i < 256; i++ {
 		if p := float64(bytes.Count(data, []byte{byte(i)})) / length; p > 0 {
@@ -61,4 +67,37 @@ func Entropy(data []byte) float64 {
 	}
 
 	return entropy
+}
+
+func IsCI() bool {
+	return os.Getenv("CI") == "true"
+}
+
+func ParallelNew[T any](cnt int, ctor func(i int) (T, error)) ([]T, error) {
+	ts := []T{}
+	mu := sync.Mutex{}
+
+	eg := errgroup.Group{}
+	for i := 1; i <= cnt; i++ {
+		i := i
+
+		eg.Go(func() error {
+			t, err := ctor(i)
+			if err != nil {
+				return err
+			}
+
+			mu.Lock()
+			ts = append(ts, t)
+			mu.Unlock()
+
+			return nil
+		})
+	}
+
+	if err := eg.Wait(); err != nil {
+		return nil, err
+	}
+
+	return ts, nil
 }

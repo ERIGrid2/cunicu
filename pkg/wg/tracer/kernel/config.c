@@ -1,8 +1,7 @@
-//go:build ignore
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
 
-// @author Steffen Vogel <post@steffenvogel.de>
-// @license Apache-2.0
-// @copyright Institute for Automation of Complex Power Systems, RWTH Aachen University
+//go:build ignore
 
 struct define {
 	const char *name;

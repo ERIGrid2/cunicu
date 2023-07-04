@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package wg
 
 import (
@@ -6,27 +9,16 @@ import (
 	"os"
 	"strings"
 
-	"github.com/stv0g/cunicu/pkg/util"
-	t "github.com/stv0g/cunicu/pkg/util/terminal"
 	"golang.org/x/exp/slices"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
+
+	"github.com/stv0g/cunicu/pkg/crypto"
+	"github.com/stv0g/cunicu/pkg/tty"
 )
 
-type Device wgtypes.Device
+type Interface wgtypes.Device
 
-type Devices []*wgtypes.Device
-
-func (devs *Devices) GetByName(name string) *wgtypes.Device {
-	for _, dev := range *devs {
-		if dev.Name == name {
-			return dev
-		}
-	}
-
-	return nil
-}
-
-func (d *Device) DumpEnv(wr io.Writer) error {
+func (d *Interface) DumpEnv(wr io.Writer) error {
 	var color, hideKeys bool
 
 	switch os.Getenv("WG_COLOR_MODE") {
@@ -37,11 +29,11 @@ func (d *Device) DumpEnv(wr io.Writer) error {
 	case "auto":
 		fallthrough
 	default:
-		color = util.IsATTY(os.Stdout)
+		color = tty.IsATTY(os.Stdout)
 	}
 
 	if !color {
-		wr = t.NewANSIStripper(wr)
+		wr = tty.NewANSIStripper(wr)
 	}
 
 	switch os.Getenv("WG_HIDE_KEYS") {
@@ -56,39 +48,67 @@ func (d *Device) DumpEnv(wr io.Writer) error {
 	return d.Dump(wr, hideKeys)
 }
 
-func (d *Device) Dump(wr io.Writer, hideKeys bool) error {
-	wri := t.NewIndenter(wr, "  ")
+func (d *Interface) Dump(wr io.Writer, hideKeys bool) error { //nolint:gocognit
+	wri := tty.NewIndenter(wr, "  ")
 
-	if _, err := fmt.Fprintf(wr, t.Color("interface", t.Bold, t.FgGreen)+": "+t.Color("%s", t.FgGreen)+"\n", d.Name); err != nil {
-		return err
-	}
+	fmt.Fprintf(wr, tty.Mods("interface", tty.Bold, tty.FgGreen)+": "+tty.Mods("%s", tty.FgGreen)+"\n", d.Name)
 
-	t.FprintKV(wri, "public key", d.PublicKey)
-	t.FprintKV(wri, "private key", "(hidden)")
-	t.FprintKV(wri, "listening port", d.ListenPort)
-
-	if !hideKeys {
-		t.FprintKV(wri, "private key", d.PrivateKey)
-	}
-
-	if d.FirewallMark > 0 {
-		t.FprintKV(wri, "fwmark", fmt.Sprintf("%#x", d.FirewallMark))
-	}
-
-	// Sort peers by last handshake time
-	slices.SortFunc(d.Peers, func(a, b wgtypes.Peer) bool { return CmpPeerHandshakeTime(&a, &b) < 0 })
-
-	for _, p := range d.Peers {
-		if _, err := fmt.Fprintf(wr, " \n"+t.Color("peer", t.Bold, t.FgYellow)+": "+t.Color("%s", t.FgYellow)+"\n", p.PublicKey); err != nil {
+	if crypto.Key(d.PrivateKey).IsSet() {
+		if _, err := tty.FprintKV(wri, "public key", d.PublicKey); err != nil {
 			return err
 		}
 
-		if p.Endpoint != nil {
-			t.FprintKV(wri, "endpoint", p.Endpoint)
+		if hideKeys {
+			if _, err := tty.FprintKV(wri, "private key", "(hidden)"); err != nil {
+				return err
+			}
+		} else {
+			if _, err := tty.FprintKV(wri, "private key", d.PrivateKey); err != nil {
+				return err
+			}
+		}
+	}
+
+	if _, err := tty.FprintKV(wri, "listening port", d.ListenPort); err != nil {
+		return err
+	}
+
+	if d.FirewallMark > 0 {
+		if _, err := tty.FprintKV(wri, "fwmark", fmt.Sprintf("%d", d.FirewallMark)); err != nil {
+			return err
+		}
+	}
+
+	// Sort peers by last handshake time
+	slices.SortFunc(d.Peers, func(a, b wgtypes.Peer) bool {
+		return CmpPeerHandshakeTime(a, b) < 0
+	})
+
+	for _, p := range d.Peers {
+		fmt.Fprintf(wr, "\n"+tty.Mods("peer", tty.Bold, tty.FgYellow)+": "+tty.Mods("%s", tty.FgYellow)+"\n", p.PublicKey)
+
+		if crypto.Key(p.PresharedKey).IsSet() {
+			if hideKeys {
+				if _, err := tty.FprintKV(wri, "preshared key", "(hidden)"); err != nil {
+					return err
+				}
+			} else {
+				if _, err := tty.FprintKV(wri, "preshared key", p.PresharedKey); err != nil {
+					return err
+				}
+			}
 		}
 
-		if p.LastHandshakeTime.Second() > 0 {
-			t.FprintKV(wri, "latest handshake", util.Ago(p.LastHandshakeTime))
+		if p.Endpoint != nil {
+			if _, err := tty.FprintKV(wri, "endpoint", p.Endpoint); err != nil {
+				return err
+			}
+		}
+
+		if !p.LastHandshakeTime.IsZero() {
+			if _, err := tty.FprintKV(wri, "latest handshake", tty.Ago(p.LastHandshakeTime)); err != nil {
+				return err
+			}
 		}
 
 		if len(p.AllowedIPs) > 0 {
@@ -97,31 +117,37 @@ func (d *Device) Dump(wr io.Writer, hideKeys bool) error {
 				allowedIPs = append(allowedIPs, allowedIP.String())
 			}
 
-			t.FprintKV(wri, "allowed ips", strings.Join(allowedIPs, ", "))
+			if _, err := tty.FprintKV(wri, "allowed ips", strings.Join(allowedIPs, ", ")); err != nil {
+				return err
+			}
 		} else {
-			t.FprintKV(wri, "allowed ips", "(none)")
+			if _, err := tty.FprintKV(wri, "allowed ips", "(none)"); err != nil {
+				return err
+			}
 		}
 
 		if p.ReceiveBytes > 0 || p.TransmitBytes > 0 {
-			t.FprintKV(wri, "transfer", fmt.Sprintf("%s received, %s sent",
-				util.PrettyBytes(p.ReceiveBytes),
-				util.PrettyBytes(p.TransmitBytes)))
+			if _, err := tty.FprintKV(wri, "transfer", fmt.Sprintf("%s received, %s sent",
+				tty.PrettyBytes(p.ReceiveBytes),
+				tty.PrettyBytes(p.TransmitBytes))); err != nil {
+				return err
+			}
 		}
 
 		if p.PersistentKeepaliveInterval > 0 {
-			t.FprintKV(wri, "persistent keepalive", util.Every(p.PersistentKeepaliveInterval))
+			if _, err := tty.FprintKV(wri, "persistent keepalive", tty.Every(p.PersistentKeepaliveInterval)); err != nil {
+				return err
+			}
 		}
 	}
 
 	return nil
 }
 
-func (d *Device) Config() *Config {
-	zero := wgtypes.Key{}
-
+func (d *Interface) Config() *Config {
 	cfg := &Config{}
 
-	if d.PrivateKey != zero {
+	if crypto.Key(d.PrivateKey).IsSet() {
 		cfg.PrivateKey = &d.PrivateKey
 	}
 
@@ -134,13 +160,15 @@ func (d *Device) Config() *Config {
 	}
 
 	for _, p := range d.Peers {
+		p := p
+
 		pcfg := wgtypes.PeerConfig{
 			PublicKey:  p.PublicKey,
 			Endpoint:   p.Endpoint,
 			AllowedIPs: p.AllowedIPs,
 		}
 
-		if p.PresharedKey != zero {
+		if crypto.Key(p.PresharedKey).IsSet() {
 			pcfg.PresharedKey = &p.PresharedKey
 		}
 

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package signaling
 
 import (
@@ -5,15 +8,16 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/stv0g/cunicu/pkg/crypto"
-	"github.com/stv0g/cunicu/pkg/util"
 	"go.uber.org/zap"
+	"golang.org/x/exp/slices"
+
+	"github.com/stv0g/cunicu/pkg/crypto"
+	"github.com/stv0g/cunicu/pkg/log"
 )
 
 var (
-	ErrNotSubscribed = errors.New("missing subscription")
-
-	AnyKey crypto.Key
+	ErrNotSubscribed   = errors.New("missing subscription")
+	errAlreadyExisting = errors.New("already existing")
 )
 
 type Subscription struct {
@@ -54,7 +58,7 @@ func (s *SubscriptionsRegistry) NewSubscription(k *crypto.Key) (*Subscription, e
 	defer s.mu.Unlock()
 
 	if _, ok := s.subs[k.PublicKey()]; ok {
-		return nil, errors.New("already existing")
+		return nil, errAlreadyExisting
 	}
 
 	sub := &Subscription{
@@ -98,7 +102,7 @@ func (s *SubscriptionsRegistry) Subscribe(kp *crypto.KeyPair, h MessageHandler) 
 		return false, err
 	}
 
-	sub.OnMessages(&kp.Theirs, h)
+	sub.AddMessageHandler(&kp.Theirs, h)
 
 	return created, nil
 }
@@ -110,7 +114,7 @@ func (s *SubscriptionsRegistry) Unsubscribe(kp *crypto.KeyPair, h MessageHandler
 		return false, err
 	}
 
-	sub.RemoveOnMessages(&kp.Theirs, h)
+	sub.RemoveMessageHandler(&kp.Theirs, h)
 
 	return len(sub.onMessages[kp.Theirs]) == 0, nil
 }
@@ -132,12 +136,12 @@ func (s *Subscription) NewMessage(env *Envelope) error {
 		return err
 	}
 
-	zap.L().Named("backend").Debug("Received signaling message", zap.Any("msg", msg), zap.Any("pkp", pkp))
+	log.Global.Named("backend").Debug("Received signaling message", zap.Reflect("msg", msg), zap.Any("pkp", pkp))
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if cbs, ok := s.onMessages[AnyKey]; ok {
+	if cbs, ok := s.onMessages[crypto.Key{}]; ok {
 		for _, cb := range cbs {
 			cb.OnSignalingMessage(&pkp, msg)
 		}
@@ -152,18 +156,20 @@ func (s *Subscription) NewMessage(env *Envelope) error {
 	return nil
 }
 
-func (s *Subscription) OnMessages(pk *crypto.Key, h MessageHandler) {
+func (s *Subscription) AddMessageHandler(pk *crypto.Key, h MessageHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.onMessages[*pk] = append(s.onMessages[*pk], h)
+	if !slices.Contains(s.onMessages[*pk], h) {
+		s.onMessages[*pk] = append(s.onMessages[*pk], h)
+	}
 }
 
-func (s *Subscription) RemoveOnMessages(pk *crypto.Key, h MessageHandler) {
+func (s *Subscription) RemoveMessageHandler(pk *crypto.Key, h MessageHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.onMessages[*pk] = util.FilterSlice(s.onMessages[*pk], func(j MessageHandler) bool {
-		return h != j
-	})
+	if idx := slices.Index(s.onMessages[*pk], h); idx > -1 {
+		s.onMessages[*pk] = slices.Delete(s.onMessages[*pk], idx, idx+1)
+	}
 }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package selfupdate
 
 // derived from http://github.com/restic/restic
@@ -5,11 +8,20 @@ package selfupdate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
+	"syscall"
 	"time"
+)
+
+var (
+	errUnexpectedResponse = errors.New("unexpected response")
+	errEmptyTag           = errors.New("tag name for latest release is empty")
+	errInvalidTag         = errors.New("invalid tag name")
 )
 
 // Release collects data about a single release on GitHub.
@@ -17,7 +29,7 @@ type Release struct {
 	Name        string    `json:"name"`
 	TagName     string    `json:"tag_name"`
 	Draft       bool      `json:"draft"`
-	PreRelease  bool      `json:"prerelease"`
+	PreRelease  bool      `json:"prerelease"` //nolint:tagliatelle
 	PublishedAt time.Time `json:"published_at"`
 	Assets      []Asset   `json:"assets"`
 
@@ -57,6 +69,10 @@ func GitHubLatestRelease(ctx context.Context) (*Release, error) {
 		return nil, err
 	}
 
+	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+
 	// pin API version 3
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
@@ -71,12 +87,12 @@ func GitHubLatestRelease(ctx context.Context) (*Release, error) {
 			// try to decode error message
 			var msg githubError
 			if err := json.NewDecoder(res.Body).Decode(&msg); err == nil {
-				return nil, fmt.Errorf("unexpected status %v (%v) returned, message: %v", res.StatusCode, res.Status, msg.Message)
+				return nil, fmt.Errorf("%w %v (%v) returned, message: %v", errUnexpectedResponse, res.StatusCode, res.Status, msg.Message)
 			}
 		}
 
 		_ = res.Body.Close()
-		return nil, fmt.Errorf("unexpected status %v (%v) returned", res.StatusCode, res.Status)
+		return nil, fmt.Errorf("%w %v (%v) returned", errUnexpectedResponse, res.StatusCode, res.Status)
 	}
 
 	buf, err := io.ReadAll(res.Body)
@@ -95,11 +111,11 @@ func GitHubLatestRelease(ctx context.Context) (*Release, error) {
 	}
 
 	if release.TagName == "" {
-		return nil, fmt.Errorf("tag name for latest release is empty")
+		return nil, errEmptyTag
 	}
 
 	if !strings.HasPrefix(release.TagName, "v") {
-		return nil, fmt.Errorf("tag name %q is invalid, does not start with 'v'", release.TagName)
+		return nil, fmt.Errorf("%w: %s, does not start with 'v'", errInvalidTag, release.TagName)
 	}
 
 	release.Version = release.TagName[1:]
@@ -122,7 +138,7 @@ func getGithubData(ctx context.Context, url string) ([]byte, error) {
 	}
 
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %v (%v) returned", res.StatusCode, res.Status)
+		return nil, fmt.Errorf("%w %v (%v) returned", errUnexpectedResponse, res.StatusCode, res.Status)
 	}
 
 	buf, err := io.ReadAll(res.Body)
@@ -149,7 +165,7 @@ func getGithubDataFile(ctx context.Context, assets []Asset, suffix string) (file
 	}
 
 	if url == "" {
-		return "", nil, fmt.Errorf("unable to find file with suffix %v", suffix)
+		return "", nil, fmt.Errorf("%w: unable to find file with suffix %v", syscall.ENOENT, suffix)
 	}
 
 	data, err = getGithubData(ctx, url)

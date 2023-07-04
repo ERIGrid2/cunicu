@@ -1,8 +1,7 @@
 #!/bin/bash
 
-# Author: Steffen Vogel <post@steffenvogel.de>
-# License: Apache-2.0
-# Copyright: Institute for Automation of Complex Power Systems, RWTH Aachen University
+# SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+# SPDX-License-Identifier: Apache-2.0
 
 # This script demonstrates the usage of the WireGuard handshake tracing feature.
 # cunicu uses an eBPF program attached to a Kprobe to extract ephemeral keys from the

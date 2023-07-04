@@ -1,13 +1,17 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package wg
 
 import (
 	"fmt"
 	"net"
 
+	g "github.com/stv0g/gont/v2/pkg"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
+
 	"github.com/stv0g/cunicu/pkg/crypto"
 	"github.com/stv0g/cunicu/test/e2e/nodes"
-	g "github.com/stv0g/gont/pkg"
-	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 type PrivateKey crypto.Key
@@ -65,8 +69,11 @@ func (ski SetupKernelInterface) Apply(i *nodes.WireGuardInterface) {
 
 type PeerSelector nodes.WireGuardPeerSelectorFunc
 
-var FullMeshPeers PeerSelector = func(i, j *nodes.WireGuardInterface) bool { return true }
-var NoPeers PeerSelector = func(i, j *nodes.WireGuardInterface) bool { return false }
+//nolint:gochecknoglobals
+var (
+	FullMeshPeers PeerSelector = func(i, j *nodes.WireGuardInterface) bool { return true }
+	NoPeers       PeerSelector = func(i, j *nodes.WireGuardInterface) bool { return false }
+)
 
 func (ps PeerSelector) Apply(i *nodes.WireGuardInterface) {
 	i.PeerSelector = nodes.WireGuardPeerSelectorFunc(ps)
@@ -79,8 +86,7 @@ func Interface(name string, opts ...g.Option) *nodes.WireGuardInterface {
 	}
 
 	for _, o := range opts {
-		switch opt := o.(type) {
-		case nodes.WireGuardInterfaceOption:
+		if opt, ok := o.(nodes.WireGuardInterfaceOption); ok {
 			opt.Apply(i)
 		}
 	}

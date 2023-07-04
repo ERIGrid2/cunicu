@@ -1,11 +1,10 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 //go:build !unix
 
 package wg
 
-import (
-	"github.com/stv0g/cunicu/pkg/errors"
-)
-
 func CleanupUserSockets() error {
-	return errors.ErrNotSupported
+	return errNotSupported
 }

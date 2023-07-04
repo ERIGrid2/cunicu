@@ -1,6 +1,10 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package nodes
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -8,20 +12,24 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pion/ice/v2"
 	"github.com/pion/stun"
-	g "github.com/stv0g/gont/pkg"
+	g "github.com/stv0g/gont/v2/pkg"
+	copt "github.com/stv0g/gont/v2/pkg/options/cmd"
 	"go.uber.org/zap"
+
+	"github.com/stv0g/cunicu/pkg/log"
 )
+
+var errTimeout = errors.New("timed out")
 
 type CoturnNode struct {
 	*g.Host
 
-	Command *exec.Cmd
+	Command *g.Cmd
 
 	Config map[string]string
 
-	logger *zap.Logger
+	logger *log.Logger
 }
 
 func NewCoturnNode(n *g.Network, name string, opts ...g.Option) (*CoturnNode, error) {
@@ -46,7 +54,7 @@ func NewCoturnNode(n *g.Network, name string, opts ...g.Option) (*CoturnNode, er
 			"realm":          "cunicu",
 			"cli-password":   "cunicu",
 		},
-		logger: zap.L().Named("node.relay").With(zap.String("node", name)),
+		logger: log.Global.Named("node.relay").With(zap.String("node", name)),
 	}
 
 	t.Config["user"] = fmt.Sprintf("%s:%s", t.Username(), t.Password())
@@ -69,6 +77,7 @@ func (c *CoturnNode) Start(_, dir string, extraArgs ...any) error {
 	_ = os.Remove(c.Config["log-file"])
 
 	args := []any{
+		copt.Dir(dir),
 		"-n",
 	}
 	args = append(args, extraArgs...)
@@ -82,7 +91,7 @@ func (c *CoturnNode) Start(_, dir string, extraArgs ...any) error {
 		args = append(args, opt)
 	}
 
-	if _, _, c.Command, err = c.StartWith("turnserver", nil, dir, args...); err != nil {
+	if c.Command, err = c.Host.Start("turnserver", args...); err != nil {
 		return fmt.Errorf("failed to start turnserver: %w", err)
 	}
 
@@ -102,7 +111,8 @@ func (c *CoturnNode) Stop() error {
 
 	if err := GracefullyTerminate(c.Command); err != nil {
 		// Coturn exits with exit code 143 (SIGTERM received)
-		if err, ok := err.(*exec.ExitError); ok && err.ExitCode() == 143 {
+		exitErr := &exec.ExitError{}
+		if ok := errors.As(err, &exitErr); ok && exitErr.ExitCode() == 143 {
 			return nil
 		}
 	}
@@ -130,7 +140,7 @@ func (c *CoturnNode) isReachable() bool {
 func (c *CoturnNode) WaitReady() error {
 	for tries := 1000; !c.isReachable(); tries-- {
 		if tries == 0 {
-			return fmt.Errorf("timed out")
+			return errTimeout
 		}
 
 		time.Sleep(20 * time.Millisecond)
@@ -139,27 +149,27 @@ func (c *CoturnNode) WaitReady() error {
 	return nil
 }
 
-func (c *CoturnNode) URLs() []*ice.URL {
+func (c *CoturnNode) URLs() []*stun.URI {
 	host := c.Name()
 
-	return []*ice.URL{
+	return []*stun.URI{
 		{
-			Scheme: ice.SchemeTypeSTUN,
+			Scheme: stun.SchemeTypeSTUN,
 			Host:   host,
 			Port:   stun.DefaultPort,
-			Proto:  ice.ProtoTypeUDP,
+			Proto:  stun.ProtoTypeUDP,
 		},
 		{
-			Scheme: ice.SchemeTypeTURN,
+			Scheme: stun.SchemeTypeTURN,
 			Host:   host,
 			Port:   stun.DefaultPort,
-			Proto:  ice.ProtoTypeUDP,
+			Proto:  stun.ProtoTypeUDP,
 		},
 		{
-			Scheme: ice.SchemeTypeTURN,
+			Scheme: stun.SchemeTypeTURN,
 			Host:   host,
 			Port:   stun.DefaultPort,
-			Proto:  ice.ProtoTypeTCP,
+			Proto:  stun.ProtoTypeTCP,
 		},
 	}
 }

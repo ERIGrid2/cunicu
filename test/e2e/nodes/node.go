@@ -1,16 +1,18 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package nodes
 
 import (
 	"fmt"
-	"os/exec"
 	"time"
 
-	g "github.com/stv0g/gont/pkg"
+	g "github.com/stv0g/gont/v2/pkg"
 	"golang.org/x/sys/unix"
 )
 
 const (
-	KillTimeout = 10 * time.Minute
+	KillTimeout = 30 * time.Second
 )
 
 type Node interface {
@@ -21,7 +23,7 @@ type Node interface {
 	Close() error
 }
 
-func GracefullyTerminate(cmd *exec.Cmd) error {
+func GracefullyTerminate(cmd *g.Cmd) error {
 	if err := cmd.Process.Signal(unix.SIGTERM); err != nil {
 		return err
 	}
@@ -35,4 +37,8 @@ func GracefullyTerminate(cmd *exec.Cmd) error {
 	defer timer.Stop()
 
 	return cmd.Wait()
+}
+
+type IncrementingDebugPort struct {
+	Port int
 }

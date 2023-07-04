@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package signaling_test
 
 import (
@@ -14,7 +17,7 @@ type readyHandler struct {
 	ready chan any
 }
 
-func (h *readyHandler) OnSignalingBackendReady(b signaling.Backend) {
+func (h *readyHandler) OnSignalingBackendReady(_ signaling.Backend) {
 	close(h.ready)
 }
 

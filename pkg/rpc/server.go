@@ -1,6 +1,10 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package rpc
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -9,10 +13,10 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
-	"github.com/stv0g/cunicu/pkg/util"
-
-	cunicu "github.com/stv0g/cunicu/pkg"
+	"github.com/stv0g/cunicu/pkg/daemon"
+	"github.com/stv0g/cunicu/pkg/log"
 	rpcproto "github.com/stv0g/cunicu/pkg/proto/rpc"
+	"github.com/stv0g/cunicu/pkg/types"
 )
 
 type Server struct {
@@ -25,28 +29,25 @@ type Server struct {
 	waitGroup sync.WaitGroup
 	waitOnce  sync.Once
 
-	events *util.FanOut[*rpcproto.Event]
+	events *types.FanOut[*rpcproto.Event]
 
-	logger *zap.Logger
+	logger *log.Logger
 }
 
-func NewServer(d *cunicu.Daemon, socket string) (*Server, error) {
+func NewServer(d *daemon.Daemon, socket string) (*Server, error) {
 	s := &Server{
-		events: util.NewFanOut[*rpcproto.Event](1),
-		logger: zap.L().Named("rpc.server"),
+		events: types.NewFanOut[*rpcproto.Event](1),
+		logger: log.Global.Named("rpc.server"),
 	}
 
 	s.waitGroup.Add(1)
 
-	s.grpc = grpc.NewServer()
+	s.grpc = grpc.NewServer(grpc.UnaryInterceptor(s.unaryInterceptor))
 
 	// Register services
 	s.daemon = NewDaemonServer(s, d)
 	s.signaling = NewSignalingServer(s, d.Backend)
-
-	if d.EndpointDiscovery != nil {
-		s.epdisc = NewEndpointDiscoveryServer(s, d.EndpointDiscovery)
-	}
+	s.epdisc = NewEndpointDiscoveryServer(s)
 
 	// Remove old unix sockets
 	if err := os.RemoveAll(socket); err != nil {
@@ -58,7 +59,11 @@ func NewServer(d *cunicu.Daemon, socket string) (*Server, error) {
 		return nil, fmt.Errorf("failed to listen at %s: %w", socket, err)
 	}
 
-	go s.grpc.Serve(l)
+	go func() {
+		if err := s.grpc.Serve(l); err != nil {
+			s.logger.Error("Failed to serve", zap.Error(err))
+		}
+	}()
 
 	return s, nil
 }
@@ -76,4 +81,23 @@ func (s *Server) Close() error {
 	s.grpc.GracefulStop()
 
 	return nil
+}
+
+func (s *Server) unaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
+	resp, err = handler(ctx, req)
+	if err != nil {
+		s.logger.Error("Failed to handle RPC request",
+			zap.Error(err),
+			zap.String("method", info.FullMethod),
+			zap.Any("request", req),
+		)
+	} else {
+		s.logger.Debug("Handling RPC request",
+			zap.String("method", info.FullMethod),
+			zap.Reflect("request", req),
+			zap.Reflect("response", resp),
+		)
+	}
+
+	return
 }

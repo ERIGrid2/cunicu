@@ -1,7 +1,12 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
+//nolint:goconst
 package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -9,13 +14,15 @@ import (
 	"github.com/spf13/cobra"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
-	"github.com/stv0g/cunicu/pkg/wg"
-
+	proto "github.com/stv0g/cunicu/pkg/proto/core"
 	rpcproto "github.com/stv0g/cunicu/pkg/proto/rpc"
+	"github.com/stv0g/cunicu/pkg/wg"
 )
 
-var (
-	wgShowCmd = &cobra.Command{
+var errUnknownField = errors.New("unknown field")
+
+func init() { //nolint:gochecknoinits
+	cmd := &cobra.Command{
 		Use:   "show { interface-name | all | interfaces } [{ public-key | private-key | listen-port | fwmark | peers | preshared-keys | endpoints | allowed-ips | latest-handshakes | transfer | persistent-keepalive | dump }]",
 		Short: "Shows current WireGuard configuration and runtime information of specified [interface].",
 		Long: `Shows current WireGuard configuration and runtime information of specified [interface].
@@ -35,22 +42,22 @@ Subsequent lines are printed for each peer and contain in order separated by tab
 		Args:              cobra.MaximumNArgs(2),
 		ValidArgsFunction: wgShowValidArgs,
 	}
-)
 
-func init() {
-	addClientCommand(wgCmd, wgShowCmd)
+	addClientCommand(wgCmd, cmd)
 }
 
-func wgShowValidArgs(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+func wgShowValidArgs(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
 	comps := []string{}
 
 	if len(args) == 0 {
 		comps = []string{"all", "interfaces"}
 
-		rpcConnect(cmd, args)
-		defer rpcDisconnect(cmd, args)
+		if err := rpcConnect(cmd, args); err != nil {
+			return nil, cobra.ShellCompDirectiveError
+		}
+		defer rpcDisconnect(cmd, args) //nolint:errcheck
 
-		sts, err := rpcClient.GetStatus(context.Background(), &rpcproto.StatusParams{})
+		sts, err := rpcClient.GetStatus(context.Background(), &rpcproto.GetStatusParams{})
 		if err != nil {
 			return nil, cobra.ShellCompDirectiveError
 		}
@@ -65,7 +72,34 @@ func wgShowValidArgs(cmd *cobra.Command, args []string, toComplete string) ([]st
 	return comps, cobra.ShellCompDirectiveNoFileComp
 }
 
-func wgShow(cmd *cobra.Command, args []string) error {
+func wgShow(_ *cobra.Command, args []string) error {
+	intf, mode, field, err := parseWgShowArgs(args)
+	if err != nil {
+		return fmt.Errorf("failed to parse arguments: %w", err)
+	}
+
+	sts, err := rpcClient.GetStatus(context.Background(), &rpcproto.GetStatusParams{
+		Interface: intf,
+	})
+	if err != nil {
+		return fmt.Errorf("failed RPC request: %w", err)
+	}
+
+	switch mode {
+	case "interfaces":
+		showInterfaceList(sts.Interfaces)
+	default:
+		for i, intf := range sts.Interfaces {
+			if err := showInterfaceDetails(intf.Device(), i, mode, field); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func parseWgShowArgs(args []string) (string, string, string, error) {
 	var intf, mode, field string
 
 	if len(args) > 0 {
@@ -94,8 +128,7 @@ func wgShow(cmd *cobra.Command, args []string) error {
 			case "persistent-keepalive":
 			case "dump":
 			default:
-				cmd.Usage()
-				os.Exit(1)
+				return "", "", "", fmt.Errorf("%w: %s", errUnknownField, args[1])
 			}
 			field = args[1]
 		} else {
@@ -106,147 +139,147 @@ func wgShow(cmd *cobra.Command, args []string) error {
 		field = "all"
 	}
 
-	sts, err := rpcClient.GetStatus(context.Background(), &rpcproto.StatusParams{
-		Intf: intf,
-	})
-	if err != nil {
-		return fmt.Errorf("failed RPC request: %w", err)
-	}
+	return intf, mode, field, nil
+}
 
+func showInterfaceList(intfs []*proto.Interface) {
 	intfNames := []string{}
 
-	for i, intf := range sts.Interfaces {
-		if mode == "interfaces" {
-			intfNames = append(intfNames, intf.Name)
+	for _, intf := range intfs {
+		intfNames = append(intfNames, intf.Name)
+	}
+
+	fmt.Println(strings.Join(intfNames, " "))
+}
+
+func showInterfaceDetails(dev *wg.Interface, i int, mode, field string) error {
+	var prefix string
+
+	if mode == "all" {
+		prefix = dev.Name + "\t"
+	}
+
+	if field == "all" {
+		if i > 0 {
+			if _, err := fmt.Println(); err != nil {
+				return err
+			}
+		}
+
+		if err := dev.DumpEnv(os.Stdout); err != nil {
+			return err
+		}
+	} else {
+		var value any
+		switch field {
+		case "public-key":
+			value = dev.PublicKey
+		case "private-key":
+			value = dev.PrivateKey
+		case "listen-port":
+			value = dev.ListenPort
+		case "fwmark":
+			value = "off"
+			if dev.FirewallMark != 0 {
+				value = fmt.Sprint(dev.FirewallMark)
+			}
+		}
+
+		if value != nil {
+			fmt.Printf("%s%v\n", prefix, value)
 		} else {
-			var prefix string
+			if field == "dump" {
+				fwmark := "off"
+				if dev.FirewallMark != 0 {
+					fwmark = fmt.Sprint(dev.FirewallMark)
+				}
 
-			mdev := intf.Device()
-			wdev := wg.Device(*mdev)
-
-			if mode == "all" {
-				prefix = wdev.Name + "\t"
+				fmt.Printf("%s%s\t%s\t%d\t%s\n",
+					prefix,
+					dev.PrivateKey,
+					dev.PublicKey,
+					dev.ListenPort,
+					fwmark,
+				)
 			}
 
-			if field == "all" {
-				if i > 0 {
-					if _, err := fmt.Println(); err != nil {
-						return err
-					}
-				}
+			for _, peer := range dev.Peers {
+				peer := peer
 
-				if err := wdev.DumpEnv(os.Stdout); err != nil {
-					return err
-				}
-			} else {
-
-				var value any
-				switch field {
-				case "public-key":
-					value = wdev.PublicKey
-				case "private-key":
-					value = wdev.PrivateKey
-				case "listen-port":
-					value = wdev.ListenPort
-				case "fwmark":
-					value = "off"
-					if wdev.FirewallMark != 0 {
-						value = fmt.Sprint(wdev.FirewallMark)
-					}
-				}
-
-				if value != nil {
-					fmt.Printf("%s%v\n", prefix, value)
+				if field == "peers" {
+					fmt.Printf("%s%s\n", prefix, peer.PublicKey)
 				} else {
-					if field == "dump" {
-						fwmark := "off"
-						if wdev.FirewallMark != 0 {
-							fwmark = fmt.Sprint(wdev.FirewallMark)
-						}
-
-						fmt.Printf("%s%s\t%s\t%d\t%s\n",
-							prefix,
-							wdev.PrivateKey,
-							wdev.PublicKey,
-							wdev.ListenPort,
-							fwmark,
-						)
-					}
-
-					for _, peer := range wdev.Peers {
-						switch field {
-						case "peers":
-							fmt.Printf("%s%s\n", prefix, peer.PublicKey)
-							continue
-						case "preshared-keys":
-							value = peer.PresharedKey
-						case "endpoints":
-							value = peer.Endpoint
-						case "allowed-ips":
-							aips := []string{}
-							for _, aip := range peer.AllowedIPs {
-								aips = append(aips, aip.String())
-							}
-							value = strings.Join(aips, " ")
-						case "latest-handshakes":
-							value = peer.LastHandshakeTime.Unix()
-							if peer.LastHandshakeTime.IsZero() {
-								value = 0
-							}
-						case "transfer":
-							value = fmt.Sprintf("%d\t%d", peer.ReceiveBytes, peer.TransmitBytes)
-						case "persistent-keepalive":
-							value = peer.PersistentKeepaliveInterval.Seconds()
-							if peer.PersistentKeepaliveInterval == 0 {
-								value = "off"
-							}
-						case "dump":
-							as := []string{}
-							for _, aip := range peer.AllowedIPs {
-								as = append(as, aip.String())
-							}
-							aIPs := strings.Join(as, ",")
-
-							zero := wgtypes.Key{}
-							psk := "(none)"
-							if peer.PresharedKey != zero {
-								psk = peer.PresharedKey.String()
-							}
-
-							ep := ""
-							if peer.Endpoint != nil {
-								ep = peer.Endpoint.String()
-							}
-
-							pka := "off"
-							if peer.PersistentKeepaliveInterval.Seconds() > 0 {
-								pka = fmt.Sprintf("%d", int(peer.PersistentKeepaliveInterval.Seconds()))
-							}
-
-							lhs := int64(0)
-							if !peer.LastHandshakeTime.IsZero() {
-								lhs = peer.LastHandshakeTime.Unix()
-							}
-
-							value = fmt.Sprintf("%s\t%s\t%s\t%s\t%d\t%d\t%d\t%s",
-								peer.PublicKey,
-								psk, ep, aIPs, lhs,
-								peer.ReceiveBytes,
-								peer.TransmitBytes,
-								pka,
-							)
-						}
-
-						fmt.Printf("%s%s\t%v\n", prefix, peer.PublicKey, value)
-					}
+					showPeerDetails(&peer, field, prefix)
 				}
 			}
 		}
 	}
 
-	if mode == "interfaces" {
-		fmt.Println(strings.Join(intfNames, " "))
+	return nil
+}
+
+func showPeerDetails(peer *wgtypes.Peer, field, prefix string) {
+	var value any
+
+	switch field {
+	case "preshared-keys":
+		value = peer.PresharedKey
+	case "endpoints":
+		value = peer.Endpoint
+	case "allowed-ips":
+		aips := []string{}
+		for _, aip := range peer.AllowedIPs {
+			aips = append(aips, aip.String())
+		}
+		value = strings.Join(aips, " ")
+	case "latest-handshakes":
+		value = peer.LastHandshakeTime.Unix()
+		if peer.LastHandshakeTime.IsZero() {
+			value = 0
+		}
+	case "transfer":
+		value = fmt.Sprintf("%d\t%d", peer.ReceiveBytes, peer.TransmitBytes)
+	case "persistent-keepalive":
+		value = peer.PersistentKeepaliveInterval.Seconds()
+		if peer.PersistentKeepaliveInterval == 0 {
+			value = "off"
+		}
+	case "dump":
+		as := []string{}
+		for _, aip := range peer.AllowedIPs {
+			as = append(as, aip.String())
+		}
+		aIPs := strings.Join(as, ",")
+
+		zero := wgtypes.Key{}
+		psk := "(none)"
+		if peer.PresharedKey != zero {
+			psk = peer.PresharedKey.String()
+		}
+
+		ep := ""
+		if peer.Endpoint != nil {
+			ep = peer.Endpoint.String()
+		}
+
+		pka := "off"
+		if peer.PersistentKeepaliveInterval.Seconds() > 0 {
+			pka = fmt.Sprintf("%d", int(peer.PersistentKeepaliveInterval.Seconds()))
+		}
+
+		lhs := int64(0)
+		if !peer.LastHandshakeTime.IsZero() {
+			lhs = peer.LastHandshakeTime.Unix()
+		}
+
+		value = fmt.Sprintf("%s\t%s\t%s\t%s\t%d\t%d\t%d\t%s",
+			peer.PublicKey,
+			psk, ep, aIPs, lhs,
+			peer.ReceiveBytes,
+			peer.TransmitBytes,
+			pka,
+		)
 	}
 
-	return nil
+	fmt.Printf("%s%s\t%v\n", prefix, peer.PublicKey, value)
 }

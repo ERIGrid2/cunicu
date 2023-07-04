@@ -1,26 +1,37 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package signaling_test
 
 import (
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
+	"testing"
+
 	"google.golang.org/protobuf/proto"
 
 	"github.com/stv0g/cunicu/pkg/crypto"
+	epdiscproto "github.com/stv0g/cunicu/pkg/proto/feature/epdisc"
+	signalingproto "github.com/stv0g/cunicu/pkg/proto/signaling"
 	"github.com/stv0g/cunicu/test"
 
-	protoepdisc "github.com/stv0g/cunicu/pkg/proto/feat/epdisc"
-	signalingproto "github.com/stv0g/cunicu/pkg/proto/signaling"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
+func TestSuite(t *testing.T) {
+	test.SetupLogging()
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Protobuf Suite")
+}
+
 var _ = Describe("message encryption", func() {
-	var c protoepdisc.Candidate
+	var c epdiscproto.Candidate
 	var ourKP, theirKP *crypto.KeyPair
 	var em signalingproto.EncryptedMessage
 
 	BeforeEach(func() {
 		var err error
 
-		c = protoepdisc.Candidate{
+		c = epdiscproto.Candidate{
 			Foundation: "1234",
 		}
 
@@ -33,7 +44,7 @@ var _ = Describe("message encryption", func() {
 	})
 
 	It("can en/decrypt a message", func() {
-		c2 := protoepdisc.Candidate{}
+		c2 := epdiscproto.Candidate{}
 		err := em.Unmarshal(&c2, theirKP)
 
 		Expect(err).To(Succeed(), "Failed to decrypt message: %s", err)
@@ -43,7 +54,7 @@ var _ = Describe("message encryption", func() {
 	It("fails to decrypt an altered message", func() {
 		em.Body[0] ^= 1
 
-		c2 := protoepdisc.Candidate{}
+		c2 := epdiscproto.Candidate{}
 		err := em.Unmarshal(&c2, theirKP)
 
 		Expect(err).To(HaveOccurred(), "Decrypted invalid message: %s", err)

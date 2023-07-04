@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2023 Steffen Vogel <post@steffenvogel.de>
+// SPDX-License-Identifier: Apache-2.0
+
 package e2e_test
 
 import (
@@ -5,17 +8,20 @@ import (
 	"fmt"
 	"time"
 
+	g "github.com/stv0g/gont/v2/pkg"
+	gopt "github.com/stv0g/gont/v2/pkg/options"
+	copt "github.com/stv0g/gont/v2/pkg/options/cmd"
+
 	"github.com/stv0g/cunicu/pkg/crypto"
+	netx "github.com/stv0g/cunicu/pkg/net"
 	"github.com/stv0g/cunicu/pkg/proto"
-	"github.com/stv0g/cunicu/pkg/util"
 	"github.com/stv0g/cunicu/pkg/wg"
 	"github.com/stv0g/cunicu/test/e2e/nodes"
+	opt "github.com/stv0g/cunicu/test/e2e/nodes/options"
 	wopt "github.com/stv0g/cunicu/test/e2e/nodes/options/wg"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	g "github.com/stv0g/gont/pkg"
-	gopt "github.com/stv0g/gont/pkg/options"
 )
 
 /* Simple local-area switched topology with 2 agents
@@ -54,6 +60,7 @@ var _ = Context("restart: Restart ICE agents", func() {
 		n.AgentOptions = append(n.AgentOptions,
 			gopt.EmptyDir(wg.ConfigPath),
 			gopt.EmptyDir(wg.SocketPath),
+			opt.ExtraArgs{"--ice-candidate-type", "host"},
 		)
 
 		n.WireGuardInterfaceOptions = append(n.WireGuardInterfaceOptions,
@@ -77,7 +84,7 @@ var _ = Context("restart: Restart ICE agents", func() {
 		By("Initializing signaling node")
 
 		s1, err = nodes.NewGrpcSignalingNode(nw, "s1",
-			gopt.Interface("eth0", sw1,
+			g.NewInterface("eth0", sw1,
 				gopt.AddressIP("10.0.0.2/16"),
 				gopt.AddressIP("fc::2/64"),
 			),
@@ -88,13 +95,13 @@ var _ = Context("restart: Restart ICE agents", func() {
 
 		AddAgent := func(i int) *nodes.Agent {
 			a, err := nodes.NewAgent(nw, fmt.Sprintf("n%d", i),
-				gopt.Customize(n.AgentOptions,
-					gopt.Interface("eth0", sw1,
+				gopt.Customize[g.Option](n.AgentOptions,
+					g.NewInterface("eth0", sw1,
 						gopt.AddressIP("10.0.1.%d/16", i),
 						gopt.AddressIP("fc::1:%d/64", i),
 					),
 					wopt.Interface("wg0",
-						gopt.Customize(n.WireGuardInterfaceOptions,
+						gopt.Customize[g.Option](n.WireGuardInterfaceOptions,
 							wopt.AddressIP("172.16.0.%d/16", i),
 						)...,
 					),
@@ -176,6 +183,7 @@ var _ = Context("restart: Restart ICE agents", func() {
 			By("Deleting old addresses from agent interface")
 
 			for _, a := range i.Addresses {
+				a := a
 				err = i.DeleteAddress(&a)
 				Expect(err).To(Succeed(), "Failed to remove IP address '%s': %s", a, err)
 			}
@@ -188,20 +196,15 @@ var _ = Context("restart: Restart ICE agents", func() {
 
 			for _, a := range i.Addresses {
 				ao := a
-				ao.IP = util.OffsetIP(ao.IP, 128)
+				ao.IP = netx.OffsetIP(ao.IP, 128)
 
 				err = i.AddAddress(&ao)
 				Expect(err).To(Succeed(), "Failed to add IP address '%s': %s", a, err)
 			}
 
-			out, _, _ := n1.Run("ip", "a")
-			GinkgoWriter.Write(out)
-
-			out, _, _ = n1.Run("wg")
-			GinkgoWriter.Write(out)
-
-			out, _, _ = n2.Run("wg")
-			GinkgoWriter.Write(out)
+			n1.Run("ip", "a", copt.Combined(GinkgoWriter)) //nolint:errcheck
+			n1.Run("wg", copt.Combined(GinkgoWriter))      //nolint:errcheck
+			n2.Run("wg", copt.Combined(GinkgoWriter))      //nolint:errcheck
 		})
 	})
 
